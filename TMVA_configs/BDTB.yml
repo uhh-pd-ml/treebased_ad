@@ -1,0 +1,4 @@
+NTrees: 400
+BoostType: Bagging
+SeparationType: GiniIndex
+nCuts: 20
