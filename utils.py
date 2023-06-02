@@ -353,8 +353,74 @@ def preds_from_optimal_iter(hist_model, x_val, y_val, x_test,
             return test_preds[:, 1]
 
 
+def train_hgb_model(data, early_stopping=True, compute_val_weights=True,
+                    max_iters=100):
+
+    if early_stopping:
+        if compute_val_weights:
+            class_weights = class_weight.compute_class_weight(
+                class_weight='balanced', classes=np.unique(data["y_val"]),
+                y=data["y_val"]
+                )
+
+            sample_weights = (
+                (np.ones(data["y_val"].shape)
+                 - data["y_val"])*class_weights[0]
+                + data["y_val"]*class_weights[1]
+                )
+        else:
+            sample_weights = None
+
+        clsf_hist_model = HistGradientBoostingClassifier(
+            max_bins=127, class_weight="balanced", max_iter=1,
+            early_stopping=False, warm_start=True)
+
+        steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
+
+        tmp_hist_model = HGBPipeline(steps)
+
+        # Save seed for random split so train/val split can be reproduced
+        if "split_val" in data.keys():
+            tmp_hist_model.split_seed = data["split_val"]
+
+        min_val_loss = np.inf
+
+        for i in range(max_iters):
+            tmp_hist_model.fit(data["x_train"], data["y_train"])
+
+            tmp_val_preds = tmp_hist_model.predict_proba(
+                data["x_val"]
+                )[:, 1]
+
+            tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
+                                    sample_weight=sample_weights)
+
+            if tmp_val_loss < min_val_loss-1e-7:
+                min_val_loss = tmp_val_loss
+                iter_diff = 0
+            else:
+                iter_diff += 1
+
+            if iter_diff >= 10:
+                break
+
+            tmp_hist_model["HGB"].max_iter += 1
+    else:
+        clsf_hist_model = HistGradientBoostingClassifier(
+            max_bins=127, class_weight="balanced", max_iter=max_iters,
+            early_stopping=False)
+
+        steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
+
+        tmp_hist_model = HGBPipeline(steps)
+        tmp_hist_model.fit(data["x_train"], data["y_train"])
+
+    return tmp_hist_model
+
+
 def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
-                                 max_iters=100, compute_val_weights=True,
+                                 max_iters=100, model_type="HGB",
+                                 compute_val_weights=True,
                                  save_full_preds=None, save_model_dir=None,
                                  early_stopping=True):
     """
@@ -385,6 +451,9 @@ def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
             Defaults to "fixed".
         max_iters (int, optional): The maximum number of iterations to train
             each model for. Defaults to 100.
+        model_type (str, optional): The type of model to train. Currently, only
+            "HGB" (HistGradientBoostingClassifier) is supported.
+            Defaults to "HGB".
         compute_val_weights (bool, optional): Whether to compute weights for
             the validation set. Defaults to True.
         save_full_preds (str, optional): The filename to save the full
@@ -414,82 +483,23 @@ def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
     cv_data = generate_cv_data(data, num_models, cv_mode)
     for ens, dat in zip(range(num_models), cv_data):
 
-        if early_stopping:
-            if compute_val_weights:
-                class_weights = class_weight.compute_class_weight(
-                    class_weight='balanced', classes=np.unique(dat["y_val"]),
-                    y=dat["y_val"]
-                    )
+        if model_type == "HGB":
+            tmp_hist_model = train_hgb_model(
+                dat, early_stopping=early_stopping,
+                compute_val_weights=True,
+                max_iters=max_iters)
 
-                sample_weights = (
-                    (np.ones(dat["y_val"].shape)
-                     - dat["y_val"])*class_weights[0]
-                    + dat["y_val"]*class_weights[1]
-                    )
-            else:
-                sample_weights = None
-
-            clsf_hist_model = HistGradientBoostingClassifier(
-                max_bins=127, class_weight="balanced", max_iter=1,
-                early_stopping=False, warm_start=True)
-
-            steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
-
-            tmp_hist_model = HGBPipeline(steps)
-
-            # Save seed for random split so train/val split can be reproduced
-            if cv_mode == "random":
-                tmp_hist_model.split_seed = dat["split_val"]
-
-            min_val_loss = np.inf
-
-            for i in range(max_iters):
-                tmp_hist_model.fit(dat["x_train"], dat["y_train"])
-
-                tmp_val_preds = tmp_hist_model.predict_proba(
-                    dat["x_val"]
-                    )[:, 1]
-
-                tmp_val_loss = log_loss(dat["y_val"], tmp_val_preds,
-                                        sample_weight=sample_weights)
-
-                if tmp_val_loss < min_val_loss-1e-7:
-                    min_val_loss = tmp_val_loss
-                    iter_diff = 0
-                else:
-                    iter_diff += 1
-
-                if iter_diff >= 10:
-                    break
-
-                tmp_hist_model["HGB"].max_iter += 1
+            tmp_hist_model.cv_mode = cv_mode
         else:
-            clsf_hist_model = HistGradientBoostingClassifier(
-                max_bins=127, class_weight="balanced", max_iter=max_iters,
-                early_stopping=False)
-
-            steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
-
-            tmp_hist_model = HGBPipeline(steps)
-            tmp_hist_model.fit(dat["x_train"], dat["y_train"])
+            raise NotImplementedError
 
         if save_model_dir is not None:
             save_model(tmp_hist_model, save_model_dir, ens)
 
         model_list.append(tmp_hist_model)
 
-        # Find out optimal iteration for this model on validation set,
-        # then get predictions of this model on test set
-        tmp_model_preds = preds_from_optimal_iter(
-            tmp_hist_model, dat["x_val"], dat["y_val"], dat["x_test"],
-            compute_weights=compute_val_weights)
-
         tmp_val_losses = get_losses(tmp_hist_model, dat["x_val"], dat["y_val"],
                                     compute_weights=compute_val_weights)
-
-        tmp_test_losses = get_losses(tmp_hist_model,
-                                     data["x_test"], data["y_test"],
-                                     compute_weights=True)
 
         tmp_train_losses = get_losses(tmp_hist_model,
                                       dat["x_train"], dat["y_train"])
@@ -499,27 +509,74 @@ def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
         loss_dict[f"model_{ens}"] = {
                 "train_loss": tmp_train_losses,
                 "val_loss": tmp_val_losses,
-                "test_loss": tmp_test_losses
             }
 
-        if ens == 0:
-            ens_preds = tmp_model_preds
+    return loss_dict, model_list
+
+
+def eval_single_model(model, data, val_losses=None):
+    """Evaluate a single model on the test set.
+
+    Args:
+        model: A trained scikit-learn's HistGradientBoostingClassifier model.
+        data (dict): A dictionary containing the test set features.
+        val_losses (dict, optional): A numpy array containing the validation
+            losses for the current model.
+
+    Returns:
+        An array of predictions for the test set.
+    """
+    if val_losses is not None:
+        best_iter = np.argmin(val_losses)
+        preds = model.staged_predict_proba(data["x_test"])
+        for i, pred in enumerate(preds):
+            if i == best_iter:
+                test_preds = pred[:, 1]
+    else:
+        test_preds = model.predict_proba(data["x_test"])[:, 1]
+
+    return test_preds
+
+
+def eval_ensemble(all_models, data, losses=None):
+    """Evaluate an ensemble of models on the test set.
+
+    Args:
+        all_models: A list of lists, where each sublist contains the
+            trained HGB models for one run.
+        data (dict): A dictionary containing the training, validation and test
+            sets as well as the corresponding labels.
+        losses (dict, optional): A dictionary containing the training,
+            validation and test losses for each model in the ensemble for all
+            runs.
+
+    Returns:
+        A numpy array of shape (num_runs, x_test.shape[0]) containing the mean
+        predictions of each HGB ensemble on the test set.
+    """
+    for run in range(len(all_models)):
+        for idx, model in enumerate(all_models[run]):
+            test_preds = eval_single_model(
+                model, data,
+                val_losses=losses[f"run_{run}"][f"model_{idx}"]["val_loss"])
+            if run == 0:
+                ens_preds = test_preds
+            else:
+                ens_preds = np.vstack([ens_preds, test_preds])
+
+        current_preds = np.mean(ens_preds, axis=0)
+        if run == 0:
+            all_preds = current_preds
         else:
-            ens_preds = np.vstack([ens_preds, tmp_model_preds])
+            all_preds = np.vstack([all_preds, current_preds])
 
-    if save_full_preds is not None:
-        print(f"Saving full predictions as {save_full_preds}")
-        np.save(save_full_preds, ens_preds)
-
-    # Finally, take mean of all predictions in the ensemble
-    ens_mean_preds = np.mean(ens_preds, axis=0)
-
-    return (ens_mean_preds, loss_dict, model_list)
+    return all_preds
 
 
 def train_histgradboost_multi(data,
                               num_runs=10, ensembles_per_model=10,
                               cv_mode="fixed", max_iters=100,
+                              model_type="HGB",
                               compute_val_weights=True,
                               save_ensemble_preds=False,
                               save_model_dir=None,
@@ -554,6 +611,9 @@ def train_histgradboost_multi(data,
             Defaults to "fixed".
         max_iters (int, optional): The maximum number of iterations to run each
             HGB training for. Default is 100.
+        model_type (str, optional): The type of model to train. Currently, only
+            "HGB" (HistGradientBoostingClassifier) is supported.
+            Defaults to "HGB".
         compute_val_weights (bool, optional): Whether or not to compute
             validation weights during training. Default is True.
         save_ensemble_preds (bool, optional): Whether or not to save the full
@@ -594,24 +654,19 @@ def train_histgradboost_multi(data,
         else:
             save_model_dir_run = None
 
-        ens_mean_preds, losses, models = train_histgradboost_ensemble(
+        losses, models = train_histgradboost_ensemble(
             data,
             num_models=ensembles_per_model, cv_mode=cv_mode,
-            max_iters=max_iters, compute_val_weights=compute_val_weights,
+            max_iters=max_iters, model_type=model_type,
+            compute_val_weights=compute_val_weights,
             save_full_preds=save_str, save_model_dir=save_model_dir_run,
             early_stopping=early_stopping
             )
 
         all_models.append(models)
-        ens_mean_preds = ens_mean_preds.reshape((1, -1))
         full_losses[f"run_{run}"] = losses
 
-        if run == 0:
-            full_preds = ens_mean_preds
-        else:
-            full_preds = np.vstack([full_preds, ens_mean_preds])
-
-    return (full_preds, full_losses, all_models)
+    return full_losses, all_models
 
 
 def loss_ndarray_from_dict(loss_dict):
