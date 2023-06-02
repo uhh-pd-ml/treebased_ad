@@ -345,7 +345,8 @@ def preds_from_optimal_iter(hist_model, x_val, y_val, x_test,
 def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
                                  y_test, num_models=10, cv_mode="fixed",
                                  max_iters=100, compute_val_weights=True,
-                                 save_full_preds=None, save_model_dir=None):
+                                 save_full_preds=None, save_model_dir=None,
+                                 early_stopping=True):
     """
     Trains an ensemble of HistGradientBoostingClassifier models and returns the
     mean predictions on the test set.
@@ -402,6 +403,7 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
 
     model_list = []
 
+    loss_dict = {}
     for ens in range(num_models):
         if cv_mode == "random":
             x_full = np.vstack([x_train, x_val])
@@ -432,17 +434,57 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
             y_val_tmp = y_val
             x_test_tmp = x_test
 
-        # Train HGB model on training set. Don't use any early stopping (will
-        # train maximum of 100 iterations, which can be changed using
-        # max_iter parameter -> sklearn default)
-        clsf_hist_model = HistGradientBoostingClassifier(
-            max_bins=127, class_weight="balanced", max_iter=max_iters,
-            early_stopping=False)
+        if early_stopping:
+            if compute_val_weights:
+                class_weights = class_weight.compute_class_weight(
+                    class_weight='balanced', classes=np.unique(y_val_tmp),
+                    y=y_val_tmp
+                    )
 
-        steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
+                sample_weights = (
+                    (np.ones(y_val_tmp.shape) - y_val_tmp)*class_weights[0]
+                    + y_val_tmp*class_weights[1]
+                    )
+            else:
+                sample_weights = None
 
-        tmp_hist_model = HGBPipeline(steps)
-        tmp_hist_model.fit(x_train_tmp, y_train_tmp)
+            clsf_hist_model = HistGradientBoostingClassifier(
+                max_bins=127, class_weight="balanced", max_iter=1,
+                early_stopping=False, warm_start=True)
+
+            steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
+
+            tmp_hist_model = HGBPipeline(steps)
+            min_val_loss = np.inf
+
+            for i in range(max_iters):
+                tmp_hist_model.fit(x_train_tmp, y_train_tmp)
+
+                tmp_val_preds = tmp_hist_model.predict_proba(x_val_tmp)[:, 1]
+                tmp_val_loss = log_loss(y_val_tmp, tmp_val_preds,
+                                        sample_weight=sample_weights)
+
+                if tmp_val_loss < min_val_loss-1e-7:
+                    min_val_loss = tmp_val_loss
+                    iter_diff = 0
+                else:
+                    iter_diff += 1
+
+                if iter_diff >= 10:
+                    print(f"Best iteration within training: {i-iter_diff}")
+                    break
+
+                tmp_hist_model["HGB"].max_iter += 1
+        else:
+            clsf_hist_model = HistGradientBoostingClassifier(
+                max_bins=127, class_weight="balanced", max_iter=max_iters,
+                early_stopping=False)
+
+            steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
+
+            tmp_hist_model = HGBPipeline(steps)
+            tmp_hist_model.fit(x_train_tmp, y_train_tmp)
+
         if save_model_dir is not None:
             save_model(tmp_hist_model, save_model_dir, ens)
 
@@ -454,33 +496,25 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
             tmp_hist_model, x_val_tmp, y_val_tmp, x_test_tmp,
             compute_weights=compute_val_weights)
 
-        tmp_model_preds = tmp_model_preds.reshape((1, -1))
-
         tmp_val_losses = get_losses(tmp_hist_model, x_val_tmp, y_val_tmp,
                                     compute_weights=compute_val_weights)
-
-        tmp_val_losses = tmp_val_losses.reshape((1, -1))
 
         tmp_test_losses = get_losses(tmp_hist_model, x_test_tmp, y_test,
                                      compute_weights=True)
 
-        tmp_test_losses = tmp_test_losses.reshape((1, -1))
-
         tmp_train_losses = get_losses(tmp_hist_model, x_train_tmp, y_train_tmp)
-        tmp_train_losses = tmp_train_losses.reshape((1, -1))
 
-        # For each model in the ensemble, stack the test predictions
+        # For each model in the ensemble, stack the test predictions and
+        # create lists of losses
+        loss_dict[f"model_{ens}"] = {
+                "train_loss": tmp_train_losses,
+                "val_loss": tmp_val_losses,
+                "test_loss": tmp_test_losses
+            }
         if ens == 0:
             ens_preds = tmp_model_preds
-            ens_val_losses = tmp_val_losses
-            ens_train_losses = tmp_train_losses
-            ens_test_losses = tmp_test_losses
         else:
             ens_preds = np.vstack([ens_preds, tmp_model_preds])
-            ens_val_losses = np.vstack([ens_val_losses, tmp_val_losses])
-            ens_train_losses = np.vstack([ens_train_losses, tmp_train_losses])
-            ens_test_losses = np.vstack([ens_test_losses, tmp_test_losses])
-
     if save_full_preds is not None:
         print(f"Saving full predictions as {save_full_preds}")
         np.save(save_full_preds, ens_preds)
@@ -488,15 +522,16 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
     # Finally, take mean of all predictions in the ensemble
     ens_mean_preds = np.mean(ens_preds, axis=0)
 
-    return (ens_mean_preds, ens_train_losses,
-            ens_val_losses, ens_test_losses, model_list)
+    return (ens_mean_preds, loss_dict, model_list)
 
 
 def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
                               num_runs=10, ensembles_per_model=10,
                               cv_mode="fixed", max_iters=100,
                               compute_val_weights=True,
-                              save_ensemble_preds=False, save_model_dir=None):
+                              save_ensemble_preds=False,
+                              save_model_dir=None,
+                              early_stopping=True):
     """
     Run multible ensembles of HGB trainings and return array of mean test
     predictions for each ensemble.
@@ -557,6 +592,7 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
             )
 
     all_models = []
+    full_losses = {}
     for run in range(num_runs):
         print(f"Run {run+1}/{num_runs}")
         if save_ensemble_preds:
@@ -568,36 +604,56 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
             save_model_dir_run = join(save_model_dir, f"run_{run}")
             if not exists(save_model_dir_run):
                 makedirs(save_model_dir_run)
+        else:
+            save_model_dir_run = None
 
-        (ens_mean_preds, ens_train_losses, ens_val_losses,
-         ens_test_losses, models) = train_histgradboost_ensemble(
+        (ens_mean_preds, losses, models) = train_histgradboost_ensemble(
             x_train, y_train, x_val, y_val, x_test, y_test,
             num_models=ensembles_per_model, cv_mode=cv_mode,
             max_iters=max_iters, compute_val_weights=compute_val_weights,
-            save_full_preds=save_str, save_model_dir=save_model_dir_run
+            save_full_preds=save_str, save_model_dir=save_model_dir_run,
+            early_stopping=early_stopping
             )
 
         all_models.append(models)
         ens_mean_preds = ens_mean_preds.reshape((1, -1))
-        ens_val_losses = ens_val_losses.reshape((1, ensembles_per_model, -1))
-        ens_train_losses = ens_train_losses.reshape(
-            (1, ensembles_per_model, -1)
-            )
-
-        ens_test_losses = ens_test_losses.reshape((1, ensembles_per_model, -1))
+        full_losses[f"run_{run}"] = losses
 
         if run == 0:
             full_preds = ens_mean_preds
-            full_train_losses = ens_train_losses
-            full_val_losses = ens_val_losses
-            full_test_losses = ens_test_losses
         else:
             full_preds = np.vstack([full_preds, ens_mean_preds])
-            full_train_losses = np.vstack(
-                [full_train_losses, ens_train_losses]
-                )
-            full_val_losses = np.vstack([full_val_losses, ens_val_losses])
-            full_test_losses = np.vstack([full_test_losses, ens_test_losses])
 
-    return (full_preds, full_train_losses, full_val_losses,
-            full_test_losses, all_models)
+    return (full_preds, full_losses, all_models)
+
+
+def loss_ndarray_from_dict(loss_dict):
+    """Convert a loss dictionary to a 2D numpy array.
+
+    Args:
+        loss_dict (dict): A dictionary containing the losses for each model in
+            the ensemble for all runs.
+
+    Returns:
+        ndarray: A 3D numpy array containing the losses for each model in the
+        ensemble for all runs.
+
+    """
+    num_runs = len(loss_dict.keys())
+    ensembles_per_model = len(loss_dict["run_0"].keys())
+    num_iters = len(loss_dict["run_0"]["model_0"]["train_loss"])
+    train_loss_arr = np.zeros((num_runs, ensembles_per_model, num_iters))
+    val_loss_arr = np.zeros((num_runs, ensembles_per_model, num_iters))
+    test_loss_arr = np.zeros((num_runs, ensembles_per_model, num_iters))
+
+    for i in range(num_runs):
+        for j in range(ensembles_per_model):
+            train_loss_arr[i, j, :] = loss_dict[f"run_{i}"][f"model_{j}"][
+                "train_loss"]
+            val_loss_arr[i, j, :] = loss_dict[f"run_{i}"][f"model_{j}"][
+                "val_loss"]
+            test_loss_arr[i, j, :] = loss_dict[f"run_{i}"][f"model_{j}"][
+                "test_loss"]
+
+    return {"train_loss": train_loss_arr, "val_loss": val_loss_arr,
+            "test_loss": test_loss_arr}
