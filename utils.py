@@ -1,11 +1,13 @@
 import numpy as np
-from os.path import join
+from os.path import join, exists, isdir
+from os import makedirs, listdir
 from sklearn.utils import class_weight
 from sklearn.metrics import log_loss
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+import joblib
 
 
 class HGBPipeline(Pipeline):
@@ -58,6 +60,74 @@ class HGBPipeline(Pipeline):
             Xt = transform.transform(Xt)
         return self.steps[-1][1].staged_predict_proba(Xt,
                                                       **predict_proba_params)
+
+
+def load_single_model(model_dir, run_num, model_num):
+    """Load a single model from a directory.
+
+    Args:
+        model_dir (str): The parent directory containing the sub-directory
+                         for the specified run, which then should contain the
+                         model file to load.
+        run_num (int): The run number of the model to load.
+        model_num (int): The model number of the model to load.
+
+    Returns:
+        The loaded model.
+
+    """
+    return joblib.load(
+        join(model_dir, f"run_{run_num}", f"model_{model_num}.joblib"))
+
+
+def load_models_allruns(model_dir):
+    """Load all models from a directory.
+
+    Args:
+        model_dir (str): The directory containing the models to load.
+                         It is required that the structure of the
+                         sub-directories is such that they start with
+                         "run_" followed by the run number and contain the
+                         model files named "model_0.joblib", "model_1.joblib",
+                         etc.
+
+    Returns:
+        A list of the loaded models.
+
+    """
+    num_runs = 0
+    for tmp_dir in listdir(model_dir):
+        if tmp_dir.startswith("run_") and isdir(join(model_dir, tmp_dir)):
+            num_runs += 1
+
+    if num_runs == 0:
+        raise ValueError("No runs found in model directory!")
+
+    all_models = []
+    for i in range(num_runs):
+        # Assume number of models in an ensemble are the same for each run
+        if i == 0:
+            models_per_run = len(listdir(join(model_dir, f"run_{i}")))
+
+        tmp_model_list = []
+        for j in range(models_per_run):
+            tmp_model_list.append(load_single_model(model_dir, i, j))
+
+        all_models.append(tmp_model_list)
+
+    return all_models
+
+
+def save_model(model, save_dir, model_num):
+    """Save a trained model to a file.
+
+    Args:
+        model: The trained model to save.
+        save_dir (str): The directory to save the model to.
+        model_num (int): The model number to use in the filename.
+
+    """
+    joblib.dump(model, join(save_dir, f"model_{model_num}.joblib"))
 
 
 def load_lhco_rd(data_dir):
@@ -275,7 +345,7 @@ def preds_from_optimal_iter(hist_model, x_val, y_val, x_test,
 def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
                                  y_test, num_models=10, cv_mode="fixed",
                                  max_iters=100, compute_val_weights=True,
-                                 save_full_preds=None):
+                                 save_full_preds=None, save_model_dir=None):
     """
     Trains an ensemble of HistGradientBoostingClassifier models and returns the
     mean predictions on the test set.
@@ -373,6 +443,9 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
 
         tmp_hist_model = HGBPipeline(steps)
         tmp_hist_model.fit(x_train_tmp, y_train_tmp)
+        if save_model_dir is not None:
+            save_model(tmp_hist_model, save_model_dir, ens)
+
         model_list.append(tmp_hist_model)
 
         # Find out optimal iteration for this model on validation set,
@@ -423,7 +496,7 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
                               num_runs=10, ensembles_per_model=10,
                               cv_mode="fixed", max_iters=100,
                               compute_val_weights=True,
-                              save_ensemble_preds=False):
+                              save_ensemble_preds=False, save_model_dir=None):
     """
     Run multible ensembles of HGB trainings and return array of mean test
     predictions for each ensemble.
@@ -491,12 +564,17 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
         else:
             save_str = None
 
+        if save_model_dir is not None:
+            save_model_dir_run = join(save_model_dir, f"run_{run}")
+            if not exists(save_model_dir_run):
+                makedirs(save_model_dir_run)
+
         (ens_mean_preds, ens_train_losses, ens_val_losses,
          ens_test_losses, models) = train_histgradboost_ensemble(
             x_train, y_train, x_val, y_val, x_test, y_test,
             num_models=ensembles_per_model, cv_mode=cv_mode,
             max_iters=max_iters, compute_val_weights=compute_val_weights,
-            save_full_preds=save_str
+            save_full_preds=save_str, save_model_dir=save_model_dir_run
             )
 
         all_models.append(models)
