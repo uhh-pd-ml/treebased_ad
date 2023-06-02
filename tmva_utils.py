@@ -92,6 +92,8 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
             TMVA model configuration. It must coincide with the name of a
             YAML file in ./TMVA_configs/. Defaults to "BDT".
         root_file_dir (str, optional): The directory to save the ROOT files.
+        load_model (bool, optional): Whether or not to load an existing model
+            instead of actually training. Default is False.
 
     Returns:
         array: The mean predictions on the test set.
@@ -297,6 +299,8 @@ def train_tmva_multi(x_train, y_train, x_val, y_val, x_test, y_test,
             YAML file in ./TMVA_configs/. Defaults to "BDT".
         root_file_dir_base (str, optional): The base name of the directory
             where ROOT files will be stored. A run number will be appended.
+        load_model (bool, optional): Whether or not to load an existing model
+            instead of actually training. Default is False.
 
     Returns:
         full_preds (array-like): The mean predictions of each ensemble on
