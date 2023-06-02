@@ -130,7 +130,7 @@ def save_model(model, save_dir, model_num):
     joblib.dump(model, join(save_dir, f"model_{model_num}.joblib"))
 
 
-def load_lhco_rd(data_dir):
+def load_lhco_rd(data_dir, shuffle=False):
     """Load the LHCO R&D dataset.
 
     This function loads the LHCO R&D dataset from a specified directory.
@@ -142,27 +142,19 @@ def load_lhco_rd(data_dir):
         1. Loads the training set, validation set and testset including their
            respective "extra" background samples.
         2. Concatenates original and extra background samples for each dataset.
-        3. Shuffles the training and validation sets.
-        5. Converts the data to the float32 data type (needed for
+        3. Shuffles the training and validation sets (if shuffle is set to
+           True).
+        4. Converts the data to the float32 data type (needed for
            pytorch DNN classifier training).
 
     Args:
         data_dir (str): The path to the directory containing the LHCO dataset.
+        shuffle (bool, optional): Whether to shuffle the training and
+            validation sets. Default is False.
 
     Returns:
-        X_train (array-like, shape=(n_samples_train, n_features)):
-            The loaded training set data.
-        y_train (array-like, shape=(n_samples_train,)):
-            The loaded training set labels.
-        X_val (array-like, shape=(n_samples_val, n_features)):
-            The loaded validation set data.
-        y_val (array-like, shape=(n_samples_val,)):
-            The loaded validation set labels.
-        X_test (array-like, shape=(n_samples_test, n_features)):
-            The loaded test set data.
-        y_test (array-like, shape=(n_samples_test,)):
-            The loaded test set labels.
-
+        dict: A dictionary containing the training, validation and test sets
+            as well as the corresponding labels.
     """
 
     # for train and val set, we only need data/bg labels
@@ -171,32 +163,45 @@ def load_lhco_rd(data_dir):
         join(data_dir, "innerdata_extrabkg_train.npy")
         )[:, 1:-1]
 
-    y_train = np.concatenate((np.ones((X_train.shape[0], )),
-                              np.zeros((X_train_extrabg.shape[0], ))))
+    y_train_databg = np.concatenate((np.ones((X_train.shape[0], )),
+                                     np.zeros((X_train_extrabg.shape[0], ))))
+
+    y_train_sigbg = np.concatenate(
+        (np.load(join(data_dir, "innerdata_train.npy"))[:, -1],
+         np.zeros((X_train_extrabg.shape[0], )))
+        )
 
     X_train = np.concatenate((X_train, X_train_extrabg))
-
-    # shuffle train set
-    shuffle_arr = np.arange(X_train.shape[0])
-    np.random.shuffle(shuffle_arr)
-    X_train = X_train[shuffle_arr]
-    y_train = y_train[shuffle_arr]
 
     X_val = np.load(join(data_dir, "innerdata_val.npy"))[:, 1:-1]
     X_val_extrabg = np.load(
         join(data_dir, "innerdata_extrabkg_val.npy")
         )[:, 1:-1]
 
-    y_val = np.concatenate((np.ones((X_val.shape[0], )),
-                            np.zeros((X_val_extrabg.shape[0], ))))
+    y_val_databg = np.concatenate((np.ones((X_val.shape[0], )),
+                                   np.zeros((X_val_extrabg.shape[0], ))))
+
+    y_val_sigbg = np.concatenate(
+        (np.load(join(data_dir, "innerdata_val.npy"))[:, -1],
+         np.zeros((X_val_extrabg.shape[0], )))
+        )
 
     X_val = np.concatenate((X_val, X_val_extrabg))
 
-    # shuffle val set
-    shuffle_arr_val = np.arange(X_val.shape[0])
-    np.random.shuffle(shuffle_arr_val)
-    X_val = X_val[shuffle_arr_val]
-    y_val = y_val[shuffle_arr_val]
+    if shuffle:
+        # shuffle train set
+        shuffle_arr = np.arange(X_train.shape[0])
+        np.random.shuffle(shuffle_arr)
+        X_train = X_train[shuffle_arr]
+        y_train_databg = y_train_databg[shuffle_arr]
+        y_train_sigbg = y_train_sigbg[shuffle_arr]
+
+        # shuffle val set
+        shuffle_arr_val = np.arange(X_val.shape[0])
+        np.random.shuffle(shuffle_arr_val)
+        X_val = X_val[shuffle_arr_val]
+        y_val_databg = y_val_databg[shuffle_arr_val]
+        y_val_sigbg = y_val_sigbg[shuffle_arr_val]
 
     # for test set, we only need sig/bg labels
     X_test = np.load(join(data_dir, "innerdata_test.npy"))[:, 1:-1]
@@ -209,14 +214,20 @@ def load_lhco_rd(data_dir):
     X_test = np.concatenate((X_test, X_test_extrabg))
     y_test = np.concatenate((y_test, y_test_extrabg))
 
+    # convert to float32 (useful for pytorch DNN training)
     X_train = X_train.astype(np.float32)
-    y_test = y_test.astype(np.float32)
+    y_train_databg = y_train_databg.astype(np.float32)
+    y_train_sigbg = y_train_sigbg.astype(np.float32)
     X_val = X_val.astype(np.float32)
-    y_val = y_val.astype(np.float32)
+    y_val_databg = y_val_databg.astype(np.float32)
+    y_val_sigbg = y_val_sigbg.astype(np.float32)
     X_test = X_test.astype(np.float32)
     y_test = y_test.astype(np.float32)
 
-    return X_train, y_train, X_val, y_val, X_test, y_test
+    return {"x_train": X_train, "y_train_databg": y_train_databg,
+            "y_train_sigbg": y_train_sigbg, "x_val": X_val,
+            "y_val_databg": y_val_databg, "y_val_sigbg": y_val_sigbg,
+            "x_test": X_test, "y_test": y_test}
 
 
 def add_gaussian_features(x_train, x_val, x_test, n_gaussians=10):
@@ -342,8 +353,7 @@ def preds_from_optimal_iter(hist_model, x_val, y_val, x_test,
             return test_preds[:, 1]
 
 
-def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
-                                 y_test, num_models=10, cv_mode="fixed",
+def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
                                  max_iters=100, compute_val_weights=True,
                                  save_full_preds=None, save_model_dir=None,
                                  early_stopping=True):
@@ -352,12 +362,8 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
     mean predictions on the test set.
 
     Args:
-        x_train (ndarray): The training features.
-        y_train (ndarray): The training set labels.
-        x_val (ndarray): The validation set features.
-        y_val (ndarray): The validation set labels.
-        x_test (ndarray): The test set features.
-        y_test (ndarray): The test set labels.
+        data (dict): A dictionary containing the training, validation and test
+            sets as well as the corresponding labels.
         num_models (int, optional): The number of models in the ensemble.
             Defaults to 10.
         cv_mode (str, optional): The cross-validation mode to use. Valid values
@@ -384,66 +390,41 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
         save_full_preds (str, optional): The filename to save the full
             predictions of the ensemble on the test set as a .npy file.
             Defaults to None (in which case no predictions will be saved).
+        save_model_dir (str, optional): The directory to save the trained
+            models to. If None, the models will not be saved. Default is None.
+        early_stopping (bool, optional): Whether or not to use early stopping
+            during training. Default is True.
 
     Returns:
-        tuple: A tuple containing the mean predictions on the test set, the
-            training losses for each model in the ensemble, the validation
-            losses for each model in the ensemble, the test losses for each
-            model in the ensemble, and a list of the trained
-            HistGradientBoostingClassifier models in the ensemble.
-
+        Tuple containing the following elements:
+        - ens_mean_preds (array-like): The mean predictions of the HGB ensemble
+            on the test set, with shape (x_test.shape[0],).
+        - loss_dict (dict): A dictionary containing the training, validation
+            and test losses for each model in the ensemble.
+        - model_list (list): A list containing the trained HGB models.
     """
 
-    if cv_mode == "k-fold":
-
-        x_full = np.vstack([x_train, x_val])
-        y_full = np.hstack([y_train, y_val])
-        x_split = np.array_split(x_full, num_models)
-        y_split = np.array_split(y_full, num_models)
+    assert cv_mode in ["fixed", "random", "k-fold"], (
+        "cv_mode must be either 'fixed', 'random' or 'k-fold'"
+        )
 
     model_list = []
 
     loss_dict = {}
-    for ens in range(num_models):
-        if cv_mode == "random":
-            x_full = np.vstack([x_train, x_val])
-            y_full = np.hstack([y_train, y_val])
-            x_train_tmp, x_val_tmp, y_train_tmp, y_val_tmp = train_test_split(
-                x_full, y_full, test_size=0.5
-                )
-
-            x_test_tmp = x_test
-
-        elif cv_mode == "k-fold":
-            x_val_tmp = x_split[ens]
-            y_val_tmp = y_split[ens]
-            x_train_tmp = np.concatenate(
-                [x_split[i] for i in range(num_models) if i != ens]
-                )
-
-            y_train_tmp = np.concatenate(
-                [y_split[i] for i in range(num_models) if i != ens]
-                )
-
-            x_test_tmp = x_test
-
-        else:
-            x_train_tmp = x_train
-            y_train_tmp = y_train
-            x_val_tmp = x_val
-            y_val_tmp = y_val
-            x_test_tmp = x_test
+    cv_data = generate_cv_data(data, num_models, cv_mode)
+    for ens, dat in zip(range(num_models), cv_data):
 
         if early_stopping:
             if compute_val_weights:
                 class_weights = class_weight.compute_class_weight(
-                    class_weight='balanced', classes=np.unique(y_val_tmp),
-                    y=y_val_tmp
+                    class_weight='balanced', classes=np.unique(dat["y_val"]),
+                    y=dat["y_val"]
                     )
 
                 sample_weights = (
-                    (np.ones(y_val_tmp.shape) - y_val_tmp)*class_weights[0]
-                    + y_val_tmp*class_weights[1]
+                    (np.ones(dat["y_val"].shape)
+                     - dat["y_val"])*class_weights[0]
+                    + dat["y_val"]*class_weights[1]
                     )
             else:
                 sample_weights = None
@@ -455,13 +436,21 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
             steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
 
             tmp_hist_model = HGBPipeline(steps)
+
+            # Save seed for random split so train/val split can be reproduced
+            if cv_mode == "random":
+                tmp_hist_model.split_seed = dat["split_val"]
+
             min_val_loss = np.inf
 
             for i in range(max_iters):
-                tmp_hist_model.fit(x_train_tmp, y_train_tmp)
+                tmp_hist_model.fit(dat["x_train"], dat["y_train"])
 
-                tmp_val_preds = tmp_hist_model.predict_proba(x_val_tmp)[:, 1]
-                tmp_val_loss = log_loss(y_val_tmp, tmp_val_preds,
+                tmp_val_preds = tmp_hist_model.predict_proba(
+                    dat["x_val"]
+                    )[:, 1]
+
+                tmp_val_loss = log_loss(dat["y_val"], tmp_val_preds,
                                         sample_weight=sample_weights)
 
                 if tmp_val_loss < min_val_loss-1e-7:
@@ -471,7 +460,6 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
                     iter_diff += 1
 
                 if iter_diff >= 10:
-                    print(f"Best iteration within training: {i-iter_diff}")
                     break
 
                 tmp_hist_model["HGB"].max_iter += 1
@@ -483,7 +471,7 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
             steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
 
             tmp_hist_model = HGBPipeline(steps)
-            tmp_hist_model.fit(x_train_tmp, y_train_tmp)
+            tmp_hist_model.fit(dat["x_train"], dat["y_train"])
 
         if save_model_dir is not None:
             save_model(tmp_hist_model, save_model_dir, ens)
@@ -493,16 +481,18 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
         # Find out optimal iteration for this model on validation set,
         # then get predictions of this model on test set
         tmp_model_preds = preds_from_optimal_iter(
-            tmp_hist_model, x_val_tmp, y_val_tmp, x_test_tmp,
+            tmp_hist_model, dat["x_val"], dat["y_val"], dat["x_test"],
             compute_weights=compute_val_weights)
 
-        tmp_val_losses = get_losses(tmp_hist_model, x_val_tmp, y_val_tmp,
+        tmp_val_losses = get_losses(tmp_hist_model, dat["x_val"], dat["y_val"],
                                     compute_weights=compute_val_weights)
 
-        tmp_test_losses = get_losses(tmp_hist_model, x_test_tmp, y_test,
+        tmp_test_losses = get_losses(tmp_hist_model,
+                                     data["x_test"], data["y_test"],
                                      compute_weights=True)
 
-        tmp_train_losses = get_losses(tmp_hist_model, x_train_tmp, y_train_tmp)
+        tmp_train_losses = get_losses(tmp_hist_model,
+                                      dat["x_train"], dat["y_train"])
 
         # For each model in the ensemble, stack the test predictions and
         # create lists of losses
@@ -511,10 +501,12 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
                 "val_loss": tmp_val_losses,
                 "test_loss": tmp_test_losses
             }
+
         if ens == 0:
             ens_preds = tmp_model_preds
         else:
             ens_preds = np.vstack([ens_preds, tmp_model_preds])
+
     if save_full_preds is not None:
         print(f"Saving full predictions as {save_full_preds}")
         np.save(save_full_preds, ens_preds)
@@ -525,7 +517,7 @@ def train_histgradboost_ensemble(x_train, y_train, x_val, y_val, x_test,
     return (ens_mean_preds, loss_dict, model_list)
 
 
-def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
+def train_histgradboost_multi(data,
                               num_runs=10, ensembles_per_model=10,
                               cv_mode="fixed", max_iters=100,
                               compute_val_weights=True,
@@ -537,13 +529,8 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
     predictions for each ensemble.
 
     Args:
-        x_train (array-like): The training data to fit the HGB model.
-        y_train (array-like): The target values for the training data.
-        x_val (array-like): The validation data to fit the HGB model.
-        y_val (array-like): The target values for the validation data.
-        x_test (array-like): The test data to predict using the trained HGB
-            models.
-        y_test (array-like): The true labels for the test data.
+        data (dict): A dictionary containing the training, validation and test
+            sets as well as the corresponding labels.
         num_runs (int, optional): The number of HGB ensemble trainings to run.
             Default is 10.
         ensembles_per_model (int, optional): The number of ensembles to train
@@ -571,19 +558,19 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
             validation weights during training. Default is True.
         save_ensemble_preds (bool, optional): Whether or not to save the full
             ensemble predictions during training. Default is False.
+        save_model_dir (str, optional): The directory to save the trained
+            models to. If None, the models will not be saved. Default is None.
+        early_stopping (bool, optional): Whether or not to use early stopping
+            during training. Default is True.
 
     Returns:
         Tuple containing the following elements:
         - full_preds (array-like): The mean predictions of each HGB ensemble on
-          the test set, with shape (num_runs, x_test.shape[0]).
-        - full_train_losses (array-like): The training losses of each HGB
-          ensemble, with shape (num_runs, ensembles_per_model, max_iters).
-        - full_val_losses (array-like): The validation losses of each HGB
-          ensemble, with shape (num_runs, ensembles_per_model, max_iters).
-        - full_test_losses (array-like): The test losses of each HGB ensemble,
-          with shape (num_runs, ensembles_per_model, max_iters).
+            the test set, with shape (num_runs, x_test.shape[0]).
+        - full_losses (dict): A dictionary containing the training, validation
+            and test losses for each model in the ensemble for all runs.
         - all_models (list): A list of lists, where each sublist contains the
-          trained HGB models for one run.
+            trained HGB models for one run.
 
     """
     if cv_mode not in ["fixed", "random", "k-fold"]:
@@ -607,8 +594,8 @@ def train_histgradboost_multi(x_train, y_train, x_val, y_val, x_test, y_test,
         else:
             save_model_dir_run = None
 
-        (ens_mean_preds, losses, models) = train_histgradboost_ensemble(
-            x_train, y_train, x_val, y_val, x_test, y_test,
+        ens_mean_preds, losses, models = train_histgradboost_ensemble(
+            data,
             num_models=ensembles_per_model, cv_mode=cv_mode,
             max_iters=max_iters, compute_val_weights=compute_val_weights,
             save_full_preds=save_str, save_model_dir=save_model_dir_run,
@@ -657,3 +644,75 @@ def loss_ndarray_from_dict(loss_dict):
 
     return {"train_loss": train_loss_arr, "val_loss": val_loss_arr,
             "test_loss": test_loss_arr}
+
+
+def generate_cv_data(data, num_models, cv_mode="fixed"):
+    """Generate cross-validation data for training an ensemble.
+
+    Args:
+        data (dict): A dictionary containing the training, validation and test
+            sets as well as the corresponding labels.
+        num_models (int): The number of models in the ensemble.
+        cv_mode (str, optional): The cross-validation mode to use. Valid values
+            are "fixed", "random", or "k-fold". The meaning of the available
+            modes is as follows:
+            - "fixed": Train ensemble on a fixed assignment of training and
+                validation set.
+            - "random": Concatenate training and validation set and randomly
+                assign training and validation samples for each model
+                constituting the ensemble
+            - "k-fold": Concatenate training and validation set, then split
+                data into `num_models` equally sized parts assign one fold as
+                validation set  and the remaining folds as training set. Train
+                all possible assignments (i.e. you should end up with
+                `num_models` models each trained on a different
+                train/validation k-fold assignment)
+            Defaults to "fixed".
+
+    Yields:
+        dict: A dictionary containing the training, validation and test sets
+            as well as the corresponding labels for each model in the ensemble.
+    """
+    if cv_mode == "k-fold":
+        x_full = np.vstack([data["x_train"], data["x_val"]])
+        y_full = np.hstack([data["y_train_databg"], data["y_val_databg"]])
+        x_split = np.array_split(x_full, num_models)
+        y_split = np.array_split(y_full, num_models)
+
+    cv_data = {}
+
+    for i in range(num_models):
+        if cv_mode == "random":
+            cv_data["split_val"] = np.random.randint(0, 100000)
+            x_full = np.vstack([data["x_train"], data["x_val"]])
+            y_full = np.hstack([data["y_train_databg"], data["y_val_databg"]])
+
+            (cv_data["x_train"], cv_data["x_val"],
+             cv_data["y_train"], cv_data["y_val"]) = train_test_split(
+                x_full, y_full, test_size=0.5,
+                random_state=cv_data["split_val"]
+                )
+
+            cv_data["x_test"] = data["x_test"]
+
+        elif cv_mode == "k-fold":
+            cv_data["x_val"] = x_split[i]
+            cv_data["y_val"] = y_split[i]
+            cv_data["x_train"] = np.concatenate(
+                [x_split[j] for j in range(num_models) if j != i]
+                )
+
+            cv_data["y_train"] = np.concatenate(
+                [y_split[j] for j in range(num_models) if j != i]
+                )
+
+            cv_data["x_test"] = data["x_test"]
+
+        else:
+            cv_data["x_train"] = data["x_train"]
+            cv_data["y_train"] = data["y_train_databg"]
+            cv_data["x_val"] = data["x_val"]
+            cv_data["y_val"] = data["y_val_databg"]
+            cv_data["x_test"] = data["x_test"]
+
+        yield cv_data
