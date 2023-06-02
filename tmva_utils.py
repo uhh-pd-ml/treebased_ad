@@ -53,7 +53,8 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
                         y_test, num_models=10, cv_mode="fixed",
                         save_full_preds=None,
                         model_identifier="BDT",
-                        root_file_dir="TMVA_models/"):
+                        root_file_dir="TMVA_models/",
+                        load_model=False):
     """
     Trains an ensemble of default TMVA BDT models and returns the
     mean predictions on the test set.
@@ -161,48 +162,53 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
             'balanced', classes=np.unique(y_val_tmp), y=y_val_tmp)
 
         # instantiating a TMVA factory
-        ROOT.TMVA.Tools.Instance()
         model_data_path = join(ens_root_file_dir, f"data_ens{ens}.root")
-        model_data_file = ROOT.TFile(model_data_path, "RECREATE")
-        factory = ROOT.TMVA.Factory("TMVAClassification", model_data_file,
-                                    ":".join(["!V",
-                                              "!Silent",
-                                              "Color",
-                                              "DrawProgressBar",
-                                              "Transformations=I;D;P;G,D",
-                                              "AnalysisType=Classification"
-                                              ]))
+        if not load_model:
+            ROOT.TMVA.Tools.Instance()
+            model_data_file = ROOT.TFile(model_data_path, "RECREATE")
+            factory = ROOT.TMVA.Factory("TMVAClassification", model_data_file,
+                                        ":".join(
+                                            ["!V",
+                                             "!Silent",
+                                             "Color",
+                                             "DrawProgressBar",
+                                             "Transformations=I;D;P;G,D",
+                                             "AnalysisType=Classification"
+                                             ]))
 
-        # putting data into TMVA dataloader
-        dataloader = ROOT.TMVA.DataLoader(ens_root_file_dir)
-        for i in range(x_train_tmp.shape[1]):
-            dataloader.AddVariable(f"var{i}", "F")
-        dataloader.AddBackgroundTree(tree_bkg_train,
-                                     class_weights_train[0],
+            # putting data into TMVA dataloader
+            dataloader = ROOT.TMVA.DataLoader(ens_root_file_dir)
+            for i in range(x_train_tmp.shape[1]):
+                dataloader.AddVariable(f"var{i}", "F")
+            dataloader.AddBackgroundTree(tree_bkg_train,
+                                         class_weights_train[0],
+                                         "Training")
+            dataloader.AddBackgroundTree(tree_bkg_val,
+                                         class_weights_val[0],
+                                         "Test")
+            dataloader.AddSignalTree(tree_sig_train,
+                                     class_weights_train[1],
                                      "Training")
-        dataloader.AddBackgroundTree(tree_bkg_val,
-                                     class_weights_val[0],
+            dataloader.AddSignalTree(tree_sig_val,
+                                     class_weights_val[1],
                                      "Test")
-        dataloader.AddSignalTree(tree_sig_train,
-                                 class_weights_train[1],
-                                 "Training")
-        dataloader.AddSignalTree(tree_sig_val,
-                                 class_weights_val[1],
-                                 "Test")
 
-        # defining BDT model and adding dataloader
-        config_file = join(f"TMVA_configs/{model_identifier}.yml")
-        assert isfile(config_file), f"Config file {config_file} not found."
-        factory.BookMethod(dataloader,
-                           ROOT.TMVA.Types.kBDT,
-                           model_identifier,
-                           f"!H:!V:{import_settings(config_file)}")
+            # defining BDT model and adding dataloader
+            config_file = join(f"TMVA_configs/{model_identifier}.yml")
+            assert isfile(config_file), f"Config file {config_file} not found."
+            factory.BookMethod(dataloader,
+                               ROOT.TMVA.Types.kBDT,
+                               model_identifier,
+                               f"!H:!V:{import_settings(config_file)}")
 
-        # actual training
-        factory.TrainAllMethods()
-        factory.TestAllMethods()
-        factory.EvaluateAllMethods()
-        model_data_file.Close()
+            # actual training
+            factory.TrainAllMethods()
+            factory.TestAllMethods()
+            factory.EvaluateAllMethods()
+            model_data_file.Close()
+
+        else:
+            print("Loading model from file...")
 
         # compute model predictions on the test set
         reader = ROOT.TMVA.Reader()
@@ -250,7 +256,8 @@ def train_tmva_multi(x_train, y_train, x_val, y_val, x_test, y_test,
                      cv_mode="fixed",
                      save_ensemble_preds=False,
                      model_identifier="BDT",
-                     root_file_dir_base="tmva_root_files"):
+                     root_file_dir_base="tmva_root_files",
+                     load_model=False):
     """
     Run multiple ensembles of default TMVA BDT trainings and
     return array of mean test predictions for each ensemble.
@@ -313,7 +320,7 @@ def train_tmva_multi(x_train, y_train, x_val, y_val, x_test, y_test,
             x_train, y_train, x_val, y_val, x_test, y_test,
             num_models=ensembles_per_model, cv_mode=cv_mode,
             save_full_preds=save_str, root_file_dir=run_dir,
-            model_identifier=model_identifier
+            model_identifier=model_identifier, load_model=load_model
             )
 
         ens_mean_preds = ens_mean_preds.reshape((1, -1))
