@@ -1,0 +1,8 @@
+NTrees: 1000
+MinNodeSize: 1.5%
+BoostType: Grad
+Shrinkage: 0.10
+UseBaggedBoost: True
+BaggedSampleFraction: 0.5
+nCuts: 20
+MaxDepth: 2

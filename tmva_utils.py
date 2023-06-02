@@ -2,22 +2,57 @@ import ROOT
 import uproot
 import numpy as np
 from os import makedirs
-from os.path import join
+from os.path import join, isfile
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from array import array
+import yaml
 
 
 def array_to_dict(input_array):
+    """
+    Converts a numpy ndarray to a dictionary of arrays, where each key
+    is "var{i}" with i being the first dimensional index of the variable
+    in the array.
+
+    Args:
+        input_array (ndarray): The input array.
+
+    Returns:
+        dict: The dictionary of arrays.
+    """
     out_dict = {}
     for i in range(input_array.shape[1]):
         out_dict[f"var{i}"] = input_array[:, i]
     return out_dict
 
 
+def import_settings(yaml_file):
+    """
+    Imports the model settings from a YAML file and returns them as a
+    string that can be used as input for TMVA.Factory.BookMethod.
+
+    Args:
+        yaml_file (str): The path to the YAML file.
+
+    Returns:
+        str: The settings as a string.
+    """
+    with open(yaml_file, 'r') as stream:
+        settings = yaml.safe_load(stream)
+    parsed_settings = []
+    for key, value in settings.items():
+        if isinstance(value, bool) and value:
+            parsed_settings.append(key)
+        else:
+            parsed_settings.append(f"{key}={value}")
+    return ":".join(parsed_settings)
+
+
 def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
                         y_test, num_models=10, cv_mode="fixed",
                         save_full_preds=None,
+                        model_identifier="BDT",
                         root_file_dir="TMVA_models/"):
     """
     Trains an ensemble of default TMVA BDT models and returns the
@@ -52,6 +87,9 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
         save_full_preds (str, optional): The filename to save the full
             predictions of the ensemble on the test set as a .npy file.
             Defaults to None (in which case no predictions will be saved).
+        model_identifier (str, optional): The identifier to use for the
+            TMVA model configuration. It must coincide with the name of a
+            YAML file in ./TMVA_configs/. Defaults to "BDT".
         root_file_dir (str, optional): The directory to save the ROOT files.
 
     Returns:
@@ -152,21 +190,12 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
                                  "Test")
 
         # defining BDT model and adding dataloader
+        config_file = join(f"TMVA_configs/{model_identifier}.yml")
+        assert isfile(config_file), f"Config file {config_file} not found."
         factory.BookMethod(dataloader,
                            ROOT.TMVA.Types.kBDT,
-                           "BDT",
-                           ":".join(["!H",
-                                     "!V",
-                                     "NTrees=850",
-                                     "MinNodeSize=2.5%",
-                                     "MaxDepth=3",
-                                     "BoostType=AdaBoost",
-                                     "AdaBoostBeta=0.5",
-                                     "UseBaggedBoost",
-                                     "BaggedSampleFraction=0.5",
-                                     "SeparationType=GiniIndex",
-                                     "nCuts=20"
-                                     ]))
+                           model_identifier,
+                           f"!H:!V:{import_settings(config_file)}")
 
         # actual training
         factory.TrainAllMethods()
@@ -183,20 +212,23 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
             reader.AddVariable(var_name, vars[-1])
 
         tmp_model_preds = np.ones_like(y_test) * -999.
-        reader.BookMVA("BDT", join(root_file_dir,
-                                   "weights",
-                                   "TMVAClassification_BDT.weights.xml"))
+        reader.BookMVA(
+            model_identifier,
+            join(root_file_dir,
+                 "weights",
+                 f"TMVAClassification_{model_identifier}.weights.xml")
+        )
 
         for i in range(len(var_names)):
             tree_test.SetBranchAddress(var_names[i], vars[i])
 
         for evt in range(tree_test.GetEntries()):
             tree_test.GetEntry(evt)
-            tmp_model_preds[evt] = reader.EvaluateMVA("BDT")
+            tmp_model_preds[evt] = reader.EvaluateMVA(model_identifier)
 
         # For each model in the ensemble, stack the test predictions
         if ens == 0:
-            ens_preds = tmp_model_preds
+            ens_preds = tmp_model_preds.reshape(1, -1)
         else:
             ens_preds = np.vstack([ens_preds, tmp_model_preds])
 
@@ -216,6 +248,7 @@ def train_tmva_multi(x_train, y_train, x_val, y_val, x_test, y_test,
                      num_runs=10, ensembles_per_model=10,
                      cv_mode="fixed",
                      save_ensemble_preds=False,
+                     model_identifier="BDT",
                      root_file_dir_base="tmva_root_files"):
     """
     Run multiple ensembles of default TMVA BDT trainings and
@@ -251,6 +284,9 @@ def train_tmva_multi(x_train, y_train, x_val, y_val, x_test, y_test,
             Defaults to "fixed".
         save_ensemble_preds (bool, optional): Whether or not to save the full
             ensemble predictions during training. Default is False.
+        model_identifier (str, optional): The identifier to use for the
+            TMVA model configuration. It must coincide with the name of a
+            YAML file in ./TMVA_configs/. Defaults to "BDT".
         root_file_dir_base (str, optional): The base name of the directory
             where ROOT files will be stored. A run number will be appended.
 
@@ -275,7 +311,8 @@ def train_tmva_multi(x_train, y_train, x_val, y_val, x_test, y_test,
         ens_mean_preds = train_tmva_ensemble(
             x_train, y_train, x_val, y_val, x_test, y_test,
             num_models=ensembles_per_model, cv_mode=cv_mode,
-            save_full_preds=save_str, root_file_dir=run_dir
+            save_full_preds=save_str, root_file_dir=run_dir,
+            model_identifier=model_identifier
             )
 
         ens_mean_preds = ens_mean_preds.reshape((1, -1))
