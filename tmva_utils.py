@@ -137,8 +137,9 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
             x_test_tmp = x_test
 
         # converting to ROOT TTrees
-        makedirs(root_file_dir, exist_ok=True)
-        tree_path = join(root_file_dir, f"trees_ens{ens}.root")
+        ens_root_file_dir = join(root_file_dir, f"ens{ens}")
+        makedirs(ens_root_file_dir, exist_ok=True)
+        tree_path = join(ens_root_file_dir, f"trees_ens{ens}.root")
         tree_file = uproot.recreate(tree_path)
         tree_file["sig_train"] = array_to_dict(x_train_tmp[y_train_tmp == 1])
         tree_file["bkg_train"] = array_to_dict(x_train_tmp[y_train_tmp == 0])
@@ -161,7 +162,7 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
 
         # instantiating a TMVA factory
         ROOT.TMVA.Tools.Instance()
-        model_data_path = join(root_file_dir, f"data_ens{ens}.root")
+        model_data_path = join(ens_root_file_dir, f"data_ens{ens}.root")
         model_data_file = ROOT.TFile(model_data_path, "RECREATE")
         factory = ROOT.TMVA.Factory("TMVAClassification", model_data_file,
                                     ":".join(["!V",
@@ -173,7 +174,7 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
                                               ]))
 
         # putting data into TMVA dataloader
-        dataloader = ROOT.TMVA.DataLoader(root_file_dir)
+        dataloader = ROOT.TMVA.DataLoader(ens_root_file_dir)
         for i in range(x_train_tmp.shape[1]):
             dataloader.AddVariable(f"var{i}", "F")
         dataloader.AddBackgroundTree(tree_bkg_train,
@@ -214,7 +215,7 @@ def train_tmva_ensemble(x_train, y_train, x_val, y_val, x_test,
         tmp_model_preds = np.ones_like(y_test) * -999.
         reader.BookMVA(
             model_identifier,
-            join(root_file_dir,
+            join(ens_root_file_dir,
                  "weights",
                  f"TMVAClassification_{model_identifier}.weights.xml")
         )
