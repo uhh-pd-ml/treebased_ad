@@ -1,5 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
+from utils import eval_ensemble, multi_roc_sigeffs
 
 
 def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
@@ -46,10 +47,11 @@ def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
     return ax
 
 
-def plot_sic_curve_comparison(tpr_val_list, fpr_val_list, y_test, out_filename,
+def plot_sic_curve_comparison(model_list, data, out_filename=None,
+                              loss_list=None, model_types=None,
                               labels=None, xlabel="TPR", ylabel="SIC",
                               legend_loc="upper right", max_rel_err=0.2,
-                              show=True, max_y=None):
+                              max_y=None):
     """A simple wrapper function of `get_sic_curves_multirun`
 
     This function allows to plot multiple SIC curves (e.g. when comparing
@@ -57,15 +59,16 @@ def plot_sic_curve_comparison(tpr_val_list, fpr_val_list, y_test, out_filename,
     respective error bands on one plot.
 
     Args:
-        tpr_val_list (numpy.ndarray): Numpy array of shape (runs, thresholds),
-            containing true positive rate (TPR) values for each chosen
-            threshold cut of the respective model predictions.
-        fpr_val_list (numpy.ndarray): Same as `tpr_val_list`, but with false
-            positive rate (FPR) values instead.
-        y_test (numpy.ndarray): Numpy array containing the labels of the test
-            set (should be 0 for background and 1 for signal events).
-        out_filename (str): String describing the filename under which the
-            plot should be saved.
+        model_list (list of list): List of models for which the SIC curves
+            should be plotted. The structure of the list should be
+            as follows: The first index refers to a separate "study" (e.g.
+            using vanilla input settings or 10 gaussian noise features added).
+            The second index is a single run of this study. The third index
+            refers to the specific model within the ensemble for that run.
+        data (dict): Dictionary containing the data to be used for evaluation.
+            Should at least contain the keys "x_test" and "y_test".
+        out_filename (str, optionaö): String describing the filename under
+            which the plot should be saved.
         labels (NoneType or list of str, optional):
             List of labels describing the different training runs that should
             be plotted for comparison. The length of the list *must* be equal
@@ -86,12 +89,45 @@ def plot_sic_curve_comparison(tpr_val_list, fpr_val_list, y_test, out_filename,
             defining the maximum y value up to which the SIC is plotted.
             Default is None, leading to `matplotlib` figuring out the limit
             by itself.
-
-    Raises:
-        ValueError: If `labels` is provided, but its length is not equal to
-            the length of `tpr_val_list`.
-
     """
+
+    if loss_list is not None:
+        assert len(model_list) == len(loss_list), (
+            "Error! `loss_list` must have same length as `model_list`"
+            )
+
+    if labels is not None:
+        assert len(model_list) == len(labels), (
+            "Error! `labels` must have same length as `model_list`"
+            )
+
+    if model_types is not None:
+        assert len(model_list) == len(model_types), (
+            "Error! `model_types` must have same length as `model_list`"
+            )
+    else:
+        print(("No model types provided. Assuming all models are scikit-learn "
+               "HistGradientBoostingClassifier instances."))
+        model_types = ["HGB"]*len(model_list)
+
+    tpr_val_list = []
+    fpr_val_list = []
+    for i in range(len(model_list)):
+        if loss_list is None:
+            loss_list = [None]*len(model_list[i])
+        
+        if model_types is None:
+            model_types = ["HGB"]*len(model_list[i])
+
+        full_preds_tmp = eval_ensemble(
+            model_list[i], data, losses=loss_list[i],
+            model_type=model_types[i],
+            )
+
+        tpr_vals_tmp, fpr_vals_tmp = multi_roc_sigeffs(full_preds_tmp,
+                                                       data["y_test"])
+        tpr_val_list.append(tpr_vals_tmp)
+        fpr_val_list.append(fpr_vals_tmp)
 
     f, ax = plt.subplots()
 
@@ -103,7 +139,8 @@ def plot_sic_curve_comparison(tpr_val_list, fpr_val_list, y_test, out_filename,
         labels = [None]*len(tpr_val_list)
 
     for i in range(len(tpr_val_list)):
-        get_sic_curves_multirun(ax, tpr_val_list[i], fpr_val_list[i], y_test,
+        get_sic_curves_multirun(ax, tpr_val_list[i], fpr_val_list[i],
+                                data["y_test"],
                                 max_rel_err=max_rel_err, label=labels[i])
 
     plt.xlabel(xlabel)
@@ -111,9 +148,9 @@ def plot_sic_curve_comparison(tpr_val_list, fpr_val_list, y_test, out_filename,
     plt.ylim(0, max_y)
     plt.ylabel(ylabel)
     plt.legend(loc=legend_loc)
-    plt.savefig(out_filename)
-    if show:
-        plt.show()
+    if out_filename is not None:
+        plt.savefig(out_filename)
+    plt.show()
     plt.close()
 
 

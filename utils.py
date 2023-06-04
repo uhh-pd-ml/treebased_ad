@@ -318,8 +318,7 @@ def preds_from_optimal_iter(hist_model, x_val, y_val, x_test,
     """Get test predictions of optimal iteration based on min. val loss.
 
     Args:
-        hist_model: a trained scikit-learn's HistGradientBoostingClassifier
-            model.
+        hist_model: a trained tree-based model.
         x_val: an array-like matrix of features of the validation set.
         y_val: an array-like matrix of labels of the validation set.
         x_test: an array-like matrix of features of the test set.
@@ -418,13 +417,13 @@ def train_hgb_model(data, early_stopping=True, compute_val_weights=True,
     return tmp_hist_model
 
 
-def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
-                                 max_iters=100, model_type="HGB",
-                                 compute_val_weights=True,
-                                 save_full_preds=None, save_model_dir=None,
-                                 early_stopping=True):
+def train_model_ensemble(data, num_models=10, cv_mode="fixed",
+                         max_iters=100, model_type="HGB",
+                         compute_val_weights=True,
+                         save_full_preds=None, save_model_dir=None,
+                         early_stopping=True):
     """
-    Trains an ensemble of HistGradientBoostingClassifier models and returns the
+    Trains an ensemble of tree-based models and returns the
     mean predictions on the test set.
 
     Args:
@@ -514,18 +513,7 @@ def train_histgradboost_ensemble(data, num_models=10, cv_mode="fixed",
     return loss_dict, model_list
 
 
-def eval_single_model(model, data, val_losses=None):
-    """Evaluate a single model on the test set.
-
-    Args:
-        model: A trained scikit-learn's HistGradientBoostingClassifier model.
-        data (dict): A dictionary containing the test set features.
-        val_losses (dict, optional): A numpy array containing the validation
-            losses for the current model.
-
-    Returns:
-        An array of predictions for the test set.
-    """
+def eval_single_HGB_model(model, data, val_losses=None):
     if val_losses is not None:
         best_iter = np.argmin(val_losses)
         preds = model.staged_predict_proba(data["x_test"])
@@ -538,7 +526,26 @@ def eval_single_model(model, data, val_losses=None):
     return test_preds
 
 
-def eval_ensemble(all_models, data, losses=None):
+def eval_single_model(model, data, val_losses=None, model_type="HGB"):
+    """Evaluate a single model on the test set.
+
+    Args:
+        model: A trained single trained model.
+        data (dict): A dictionary containing the test set features.
+        val_losses (dict, optional): A numpy array containing the validation
+            losses for the current model.
+
+    Returns:
+        An array of predictions for the test set.
+    """
+
+    if model_type == "HGB":
+        return eval_single_HGB_model(model, data, val_losses)
+    else:
+        raise NotImplementedError
+
+
+def eval_ensemble(all_models, data, losses=None, model_type="HGB"):
     """Evaluate an ensemble of models on the test set.
 
     Args:
@@ -556,15 +563,23 @@ def eval_ensemble(all_models, data, losses=None):
     """
     for run in range(len(all_models)):
         for idx, model in enumerate(all_models[run]):
+            if losses is not None:
+                tmp_val_losses = (
+                    losses[f"run_{run}"][f"model_{idx}"]["val_loss"]
+                    )
+            else:
+                tmp_val_losses = None
+
             test_preds = eval_single_model(
                 model, data,
-                val_losses=losses[f"run_{run}"][f"model_{idx}"]["val_loss"])
-            if run == 0:
+                val_losses=tmp_val_losses,
+                model_type=model_type)
+            if idx == 0:
                 ens_preds = test_preds
             else:
                 ens_preds = np.vstack([ens_preds, test_preds])
 
-        current_preds = np.mean(ens_preds, axis=0)
+        current_preds = np.mean(ens_preds, axis=0).reshape((1, -1))
         if run == 0:
             all_preds = current_preds
         else:
@@ -573,14 +588,14 @@ def eval_ensemble(all_models, data, losses=None):
     return all_preds
 
 
-def train_histgradboost_multi(data,
-                              num_runs=10, ensembles_per_model=10,
-                              cv_mode="fixed", max_iters=100,
-                              model_type="HGB",
-                              compute_val_weights=True,
-                              save_ensemble_preds=False,
-                              save_model_dir=None,
-                              early_stopping=True):
+def train_model_multirun(data,
+                         num_runs=10, ensembles_per_model=10,
+                         cv_mode="fixed", max_iters=100,
+                         model_type="HGB",
+                         compute_val_weights=True,
+                         save_ensemble_preds=False,
+                         save_model_dir=None,
+                         early_stopping=True):
     """
     Run multible ensembles of HGB trainings and return array of mean test
     predictions for each ensemble.
@@ -654,7 +669,7 @@ def train_histgradboost_multi(data,
         else:
             save_model_dir_run = None
 
-        losses, models = train_histgradboost_ensemble(
+        losses, models = train_model_ensemble(
             data,
             num_models=ensembles_per_model, cv_mode=cv_mode,
             max_iters=max_iters, model_type=model_type,
@@ -686,7 +701,6 @@ def loss_ndarray_from_dict(loss_dict):
     num_iters = len(loss_dict["run_0"]["model_0"]["train_loss"])
     train_loss_arr = np.zeros((num_runs, ensembles_per_model, num_iters))
     val_loss_arr = np.zeros((num_runs, ensembles_per_model, num_iters))
-    test_loss_arr = np.zeros((num_runs, ensembles_per_model, num_iters))
 
     for i in range(num_runs):
         for j in range(ensembles_per_model):
@@ -694,11 +708,8 @@ def loss_ndarray_from_dict(loss_dict):
                 "train_loss"]
             val_loss_arr[i, j, :] = loss_dict[f"run_{i}"][f"model_{j}"][
                 "val_loss"]
-            test_loss_arr[i, j, :] = loss_dict[f"run_{i}"][f"model_{j}"][
-                "test_loss"]
 
-    return {"train_loss": train_loss_arr, "val_loss": val_loss_arr,
-            "test_loss": test_loss_arr}
+    return {"train_loss": train_loss_arr, "val_loss": val_loss_arr}
 
 
 def generate_cv_data(data, num_models, cv_mode="fixed"):
