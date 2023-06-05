@@ -4,10 +4,15 @@ from os import makedirs, listdir
 from sklearn.utils import class_weight
 from sklearn.metrics import log_loss
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import (HistGradientBoostingClassifier,
+                              RandomForestClassifier,
+                              AdaBoostClassifier)
+from sklearn.neural_network import MLPClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import joblib
+from copy import deepcopy
 
 
 class HGBPipeline(Pipeline):
@@ -230,30 +235,38 @@ def load_lhco_rd(data_dir, shuffle=False):
             "x_test": X_test, "y_test": y_test}
 
 
-def add_gaussian_features(x_train, x_val, x_test, n_gaussians=10):
+def add_gaussian_features(data, n_gaussians=10):
     """Adds Gaussian-distributed random variables to input features
 
     Args:
-        x_train (numpy.ndarray): Training set features.
-        x_val (numpy.ndarray): Validation set features.
-        x_test (numpy.ndarray): Test set features.
+        data (dict): Dictionary containing the training, validation and test
+            sets as well as the corresponding labels.
         n_gaussians (int, optional): Number of Gaussian random variables to
             generate and add to the input data. Default is 10.
 
     Returns:
-        tuple: Tuple containing the updated features for the training,
-        validation and test sets, respectively, with Gaussian-distributed
-        random variables added as additional features.
+        data (dict): Dictionary containing the training, validation and test
+            sets as well as the corresponding labels, with Gaussian random
+            variables added to the input data.
     """
-    rand_var_train = np.random.randn(x_train.shape[0], n_gaussians)
-    rand_var_val = np.random.randn(x_val.shape[0], n_gaussians)
-    rand_var_test = np.random.randn(x_test.shape[0], n_gaussians)
+    new_data = deepcopy(data)
+    rand_var_train = np.random.randn(new_data["x_train"].shape[0], n_gaussians)
+    rand_var_val = np.random.randn(new_data["x_val"].shape[0], n_gaussians)
+    rand_var_test = np.random.randn(new_data["x_test"].shape[0], n_gaussians)
 
-    x_train_gaus = np.hstack([x_train, rand_var_train]).astype(np.float32)
-    x_val_gaus = np.hstack([x_val, rand_var_val]).astype(np.float32)
-    x_test_gaus = np.hstack([x_test, rand_var_test]).astype(np.float32)
+    new_data["x_train"] = np.hstack(
+        [new_data["x_train"], rand_var_train]
+        ).astype(np.float32)
 
-    return x_train_gaus, x_val_gaus, x_test_gaus
+    new_data["x_val"] = np.hstack(
+        [new_data["x_val"], rand_var_val]
+        ).astype(np.float32)
+
+    new_data["x_test"] = np.hstack(
+        [new_data["x_test"], rand_var_test]
+        ).astype(np.float32)
+
+    return new_data
 
 
 def multi_roc_sigeffs(preds, labels):
@@ -352,67 +365,247 @@ def preds_from_optimal_iter(hist_model, x_val, y_val, x_test,
             return test_preds[:, 1]
 
 
-def train_hgb_model(data, early_stopping=True, compute_val_weights=True,
+def get_sample_weights(y):
+    # Compute class weights for training set for weighted loss
+    class_weights = class_weight.compute_class_weight(
+                class_weight='balanced', classes=np.unique(y),
+                y=y
+                )
+
+    sample_weights = (
+        (np.ones(y.shape) - y)*class_weights[0]
+        + y*class_weights[1]
+        )
+
+    return sample_weights
+
+
+def train_rf_model(data, early_stopping=True, compute_val_weights=True,
+                   max_iters=100):
+
+    train_sample_weights = get_sample_weights(data["y_train"])
+    if compute_val_weights:
+        sample_weights = get_sample_weights(data["y_val"])
+    else:
+        sample_weights = None
+
+    clsf_hist_model = RandomForestClassifier(
+            n_estimators=1, max_depth=23, min_samples_leaf=20,
+            max_features="log2", min_samples_split=14,
+            max_samples=0.5434762030454895, class_weight="balanced",
+            warm_start=True
+            )
+
+    steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
+
+    tmp_hist_model = HGBPipeline(steps)
+
+    # Save seed for random split so train/val split can be reproduced
+    if "split_val" in data.keys():
+        tmp_hist_model.split_seed = data["split_val"]
+
+    min_val_loss = np.inf
+    val_losses = []
+    train_losses = []
+
+    for i in range(max_iters):
+        tmp_hist_model.fit(data["x_train"], data["y_train"])
+
+        tmp_train_preds = tmp_hist_model.predict_proba(
+            data["x_train"]
+            )[:, 1]
+
+        tmp_train_loss = log_loss(data["y_train"], tmp_train_preds,
+                                  sample_weight=train_sample_weights)
+
+        tmp_val_preds = tmp_hist_model.predict_proba(
+            data["x_val"]
+            )[:, 1]
+
+        tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
+                                sample_weight=sample_weights)
+
+        val_losses.append(tmp_val_loss)
+        train_losses.append(tmp_train_loss)
+
+        if tmp_val_loss < min_val_loss-1e-7:
+            min_val_loss = tmp_val_loss
+            iter_diff = 0
+            tmp_hist_model.best_iter = i
+            tmp_hist_model.best_model_state = deepcopy(tmp_hist_model)
+        else:
+            iter_diff += 1
+
+        if early_stopping and (iter_diff >= 10):
+            break
+
+        tmp_hist_model['clsf'].n_estimators += 1
+
+    tmp_hist_model.val_losses = val_losses
+    tmp_hist_model.train_losses = train_losses
+
+    return tmp_hist_model
+
+
+def train_ada_model(data, early_stopping=True,
                     max_iters=100):
 
+    # Scikit-learn's AdaBoostClassifier does not support early stopping
     if early_stopping:
-        if compute_val_weights:
-            class_weights = class_weight.compute_class_weight(
-                class_weight='balanced', classes=np.unique(data["y_val"]),
-                y=data["y_val"]
-                )
-
-            sample_weights = (
-                (np.ones(data["y_val"].shape)
-                 - data["y_val"])*class_weights[0]
-                + data["y_val"]*class_weights[1]
-                )
-        else:
-            sample_weights = None
-
-        clsf_hist_model = HistGradientBoostingClassifier(
-            max_bins=127, class_weight="balanced", max_iter=1,
-            early_stopping=False, warm_start=True)
-
-        steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
-
-        tmp_hist_model = HGBPipeline(steps)
-
-        # Save seed for random split so train/val split can be reproduced
-        if "split_val" in data.keys():
-            tmp_hist_model.split_seed = data["split_val"]
-
-        min_val_loss = np.inf
-
-        for i in range(max_iters):
-            tmp_hist_model.fit(data["x_train"], data["y_train"])
-
-            tmp_val_preds = tmp_hist_model.predict_proba(
-                data["x_val"]
-                )[:, 1]
-
-            tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
-                                    sample_weight=sample_weights)
-
-            if tmp_val_loss < min_val_loss-1e-7:
-                min_val_loss = tmp_val_loss
-                iter_diff = 0
-            else:
-                iter_diff += 1
-
-            if iter_diff >= 10:
-                break
-
-            tmp_hist_model["HGB"].max_iter += 1
+        raise NotImplementedError
     else:
-        clsf_hist_model = HistGradientBoostingClassifier(
-            max_bins=127, class_weight="balanced", max_iter=max_iters,
-            early_stopping=False)
+        clsf_hist_model = AdaBoostClassifier(
+                estimator=DecisionTreeClassifier(
+                    max_depth=None, max_leaf_nodes=31, min_samples_leaf=20,
+                    class_weight='balanced'
+                    ),
+                n_estimators=max_iters, learning_rate=0.1
+                )
 
-        steps = [('scaler', StandardScaler()), ('HGB', clsf_hist_model)]
+        steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
 
         tmp_hist_model = HGBPipeline(steps)
         tmp_hist_model.fit(data["x_train"], data["y_train"])
+
+    tmp_hist_model.best_model_state = None
+    train_losses = get_losses(tmp_hist_model, data["x_train"], data["y_train"],
+                              compute_weights=True)
+
+    val_losses = get_losses(tmp_hist_model, data["x_val"], data["y_val"],
+                            compute_weights=True)
+
+    tmp_hist_model.best_iter = np.argmin(val_losses)
+    tmp_hist_model.train_losses = train_losses
+    tmp_hist_model.val_losses = val_losses
+
+    return tmp_hist_model
+
+
+def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
+                    max_iters=100):
+
+    # Compute class weights for training set for weighted loss
+    train_sample_weights = get_sample_weights(data["y_train"])
+
+    if compute_val_weights:
+        sample_weights = get_sample_weights(data["y_val"])
+    else:
+        sample_weights = None
+
+    clsf_hist_model = MLPClassifier(
+        hidden_layer_sizes=(64, 64, 64),
+        max_iter=1,
+        early_stopping=False, warm_start=True)
+
+    steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
+
+    tmp_hist_model = HGBPipeline(steps)
+
+    # Save seed for random split so train/val split can be reproduced
+    if "split_val" in data.keys():
+        tmp_hist_model.split_seed = data["split_val"]
+
+    min_val_loss = np.inf
+
+    train_losses = []
+    val_losses = []
+
+    for i in range(max_iters):
+        tmp_hist_model.fit(data["x_train"], data["y_train"])
+
+        tmp_train_preds = tmp_hist_model.predict_proba(data["x_train"])[:, 1]
+        tmp_train_loss = log_loss(data["y_train"], tmp_train_preds,
+                                  sample_weight=train_sample_weights)
+
+        tmp_val_preds = tmp_hist_model.predict_proba(
+            data["x_val"]
+            )[:, 1]
+
+        tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
+                                sample_weight=sample_weights)
+
+        train_losses.append(tmp_train_loss)
+        val_losses.append(tmp_val_loss)
+
+        if tmp_val_loss < min_val_loss-1e-7:
+            min_val_loss = tmp_val_loss
+            iter_diff = 0
+            tmp_hist_model.best_model_state = deepcopy(tmp_hist_model)
+            tmp_hist_model.best_iter = i
+        else:
+            iter_diff += 1
+
+        if early_stopping and (iter_diff >= 10):
+            break
+
+        tmp_hist_model["clsf"].max_iter += 1
+
+    tmp_hist_model.train_losses = train_losses
+    tmp_hist_model.val_losses = val_losses
+
+    return tmp_hist_model
+
+
+def train_hgb_model(data, early_stopping=True, compute_val_weights=True,
+                    max_iters=100):
+
+    # Compute class weights for training set for weighted loss
+    train_sample_weights = get_sample_weights(data["y_train"])
+
+    if compute_val_weights:
+        sample_weights = get_sample_weights(data["y_val"])
+    else:
+        sample_weights = None
+
+    clsf_hist_model = HistGradientBoostingClassifier(
+        max_bins=127, class_weight="balanced", max_iter=1,
+        early_stopping=False, warm_start=True)
+
+    steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
+
+    tmp_hist_model = HGBPipeline(steps)
+
+    # Save seed for random split so train/val split can be reproduced
+    if "split_val" in data.keys():
+        tmp_hist_model.split_seed = data["split_val"]
+
+    min_val_loss = np.inf
+
+    train_losses = []
+    val_losses = []
+
+    for i in range(max_iters):
+        tmp_hist_model.fit(data["x_train"], data["y_train"])
+
+        tmp_train_preds = tmp_hist_model.predict_proba(data["x_train"])[:, 1]
+        tmp_train_loss = log_loss(data["y_train"], tmp_train_preds,
+                                  sample_weight=train_sample_weights)
+
+        tmp_val_preds = tmp_hist_model.predict_proba(
+            data["x_val"]
+            )[:, 1]
+
+        tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
+                                sample_weight=sample_weights)
+
+        train_losses.append(tmp_train_loss)
+        val_losses.append(tmp_val_loss)
+
+        if tmp_val_loss < min_val_loss-1e-7:
+            min_val_loss = tmp_val_loss
+            iter_diff = 0
+            tmp_hist_model.best_model_state = deepcopy(tmp_hist_model)
+            tmp_hist_model.best_iter = i
+        else:
+            iter_diff += 1
+
+        if early_stopping and (iter_diff >= 10):
+            break
+
+        tmp_hist_model["clsf"].max_iter += 1
+
+    tmp_hist_model.train_losses = train_losses
+    tmp_hist_model.val_losses = val_losses
 
     return tmp_hist_model
 
@@ -420,7 +613,7 @@ def train_hgb_model(data, early_stopping=True, compute_val_weights=True,
 def train_model_ensemble(data, num_models=10, cv_mode="fixed",
                          max_iters=100, model_type="HGB",
                          compute_val_weights=True,
-                         save_full_preds=None, save_model_dir=None,
+                         save_model_dir=None,
                          early_stopping=True):
     """
     Trains an ensemble of tree-based models and returns the
@@ -450,14 +643,12 @@ def train_model_ensemble(data, num_models=10, cv_mode="fixed",
             Defaults to "fixed".
         max_iters (int, optional): The maximum number of iterations to train
             each model for. Defaults to 100.
-        model_type (str, optional): The type of model to train. Currently, only
-            "HGB" (HistGradientBoostingClassifier) is supported.
-            Defaults to "HGB".
+        model_type (str, optional): The type of model to train. Currently,
+            "HGB" (HistGradientBoostingClassifier),
+            "RF" (RandomForestClassifier) and "Ada" (AdaboostClassifier)
+            are supported. Default is "HGB".
         compute_val_weights (bool, optional): Whether to compute weights for
             the validation set. Defaults to True.
-        save_full_preds (str, optional): The filename to save the full
-            predictions of the ensemble on the test set as a .npy file.
-            Defaults to None (in which case no predictions will be saved).
         save_model_dir (str, optional): The directory to save the trained
             models to. If None, the models will not be saved. Default is None.
         early_stopping (bool, optional): Whether or not to use early stopping
@@ -485,7 +676,26 @@ def train_model_ensemble(data, num_models=10, cv_mode="fixed",
         if model_type == "HGB":
             tmp_hist_model = train_hgb_model(
                 dat, early_stopping=early_stopping,
-                compute_val_weights=True,
+                compute_val_weights=compute_val_weights,
+                max_iters=max_iters)
+
+            tmp_hist_model.cv_mode = cv_mode
+        elif model_type == "RF":
+            tmp_hist_model = train_rf_model(
+                dat, early_stopping=early_stopping,
+                compute_val_weights=compute_val_weights,
+                max_iters=max_iters)
+
+            tmp_hist_model.cv_mode = cv_mode
+        elif model_type == "Ada":
+            tmp_hist_model = train_ada_model(
+                dat, early_stopping=early_stopping,
+                max_iters=max_iters)
+
+            tmp_hist_model.cv_mode = cv_mode
+        elif model_type == "DNN":
+            tmp_hist_model = train_dnn_model(
+                dat, early_stopping=early_stopping,
                 max_iters=max_iters)
 
             tmp_hist_model.cv_mode = cv_mode
@@ -497,14 +707,11 @@ def train_model_ensemble(data, num_models=10, cv_mode="fixed",
 
         model_list.append(tmp_hist_model)
 
-        tmp_val_losses = get_losses(tmp_hist_model, dat["x_val"], dat["y_val"],
-                                    compute_weights=compute_val_weights)
+        tmp_val_losses = tmp_hist_model.val_losses
 
-        tmp_train_losses = get_losses(tmp_hist_model,
-                                      dat["x_train"], dat["y_train"])
+        tmp_train_losses = tmp_hist_model.train_losses
 
-        # For each model in the ensemble, stack the test predictions and
-        # create lists of losses
+        # For each model in the ensemble, put losses in dictionary to return
         loss_dict[f"model_{ens}"] = {
                 "train_loss": tmp_train_losses,
                 "val_loss": tmp_val_losses,
@@ -513,39 +720,54 @@ def train_model_ensemble(data, num_models=10, cv_mode="fixed",
     return loss_dict, model_list
 
 
-def eval_single_HGB_model(model, data, val_losses=None):
-    if val_losses is not None:
-        best_iter = np.argmin(val_losses)
-        preds = model.staged_predict_proba(data["x_test"])
-        for i, pred in enumerate(preds):
-            if i == best_iter:
-                test_preds = pred[:, 1]
-    else:
-        test_preds = model.predict_proba(data["x_test"])[:, 1]
+def eval_single_HGB_model(model, data):
+    test_preds = model.best_model_state.predict_proba(data["x_test"])[:, 1]
+    return test_preds
+
+
+def eval_single_dnn_model(model, data):
+    return model.best_model_state.predict_proba(data["x_test"])[:, 1]
+
+
+def eval_single_adaboost_model(model, data):
+    preds = model.staged_predict_proba(data["x_test"])
+    for idx, pred in enumerate(preds):
+        if idx == model.best_iter:
+            return pred[:, 1]
+
+
+def eval_single_rf_model(model, data):
+    test_preds = model.best_model_state.predict_proba(data["x_test"])[:, 1]
 
     return test_preds
 
 
-def eval_single_model(model, data, val_losses=None, model_type="HGB"):
+def eval_single_model(model, data, model_type="HGB"):
     """Evaluate a single model on the test set.
 
     Args:
         model: A trained single trained model.
         data (dict): A dictionary containing the test set features.
-        val_losses (dict, optional): A numpy array containing the validation
-            losses for the current model.
+        model_type (str, optional): The type of model to evaluate. Currently,
+            "HGB" (HistGradientBoostingClassifier),
+            "RF" (RandomForestClassifier) and "Ada" (AdaboostClassifier)
+            are supported. Default is "HGB".
 
     Returns:
         An array of predictions for the test set.
     """
 
     if model_type == "HGB":
-        return eval_single_HGB_model(model, data, val_losses)
+        return eval_single_HGB_model(model, data)
+    elif model_type == "RF":
+        return eval_single_rf_model(model, data)
+    elif model_type == "Ada":
+        return eval_single_adaboost_model(model, data)
     else:
         raise NotImplementedError
 
 
-def eval_ensemble(all_models, data, losses=None, model_type="HGB"):
+def eval_ensemble(all_models, data, model_type="HGB"):
     """Evaluate an ensemble of models on the test set.
 
     Args:
@@ -553,9 +775,6 @@ def eval_ensemble(all_models, data, losses=None, model_type="HGB"):
             trained HGB models for one run.
         data (dict): A dictionary containing the training, validation and test
             sets as well as the corresponding labels.
-        losses (dict, optional): A dictionary containing the training,
-            validation and test losses for each model in the ensemble for all
-            runs.
 
     Returns:
         A numpy array of shape (num_runs, x_test.shape[0]) containing the mean
@@ -563,16 +782,9 @@ def eval_ensemble(all_models, data, losses=None, model_type="HGB"):
     """
     for run in range(len(all_models)):
         for idx, model in enumerate(all_models[run]):
-            if losses is not None:
-                tmp_val_losses = (
-                    losses[f"run_{run}"][f"model_{idx}"]["val_loss"]
-                    )
-            else:
-                tmp_val_losses = None
 
             test_preds = eval_single_model(
                 model, data,
-                val_losses=tmp_val_losses,
                 model_type=model_type)
             if idx == 0:
                 ens_preds = test_preds
@@ -593,7 +805,6 @@ def train_model_multirun(data,
                          cv_mode="fixed", max_iters=100,
                          model_type="HGB",
                          compute_val_weights=True,
-                         save_ensemble_preds=False,
                          save_model_dir=None,
                          early_stopping=True):
     """
@@ -631,8 +842,6 @@ def train_model_multirun(data,
             Defaults to "HGB".
         compute_val_weights (bool, optional): Whether or not to compute
             validation weights during training. Default is True.
-        save_ensemble_preds (bool, optional): Whether or not to save the full
-            ensemble predictions during training. Default is False.
         save_model_dir (str, optional): The directory to save the trained
             models to. If None, the models will not be saved. Default is None.
         early_stopping (bool, optional): Whether or not to use early stopping
@@ -640,8 +849,6 @@ def train_model_multirun(data,
 
     Returns:
         Tuple containing the following elements:
-        - full_preds (array-like): The mean predictions of each HGB ensemble on
-            the test set, with shape (num_runs, x_test.shape[0]).
         - full_losses (dict): A dictionary containing the training, validation
             and test losses for each model in the ensemble for all runs.
         - all_models (list): A list of lists, where each sublist contains the
@@ -657,10 +864,6 @@ def train_model_multirun(data,
     full_losses = {}
     for run in range(num_runs):
         print(f"Run {run+1}/{num_runs}")
-        if save_ensemble_preds:
-            save_str = f"./ensemble_preds_run{run}.npy"
-        else:
-            save_str = None
 
         if save_model_dir is not None:
             save_model_dir_run = join(save_model_dir, f"run_{run}")
@@ -674,7 +877,7 @@ def train_model_multirun(data,
             num_models=ensembles_per_model, cv_mode=cv_mode,
             max_iters=max_iters, model_type=model_type,
             compute_val_weights=compute_val_weights,
-            save_full_preds=save_str, save_model_dir=save_model_dir_run,
+            save_model_dir=save_model_dir_run,
             early_stopping=early_stopping
             )
 
