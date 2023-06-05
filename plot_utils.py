@@ -48,7 +48,7 @@ def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
 
 
 def plot_sic_curve_comparison(model_list, data, out_filename=None,
-                              loss_list=None, model_types=None,
+                              model_types=None,
                               labels=None, xlabel="TPR", ylabel="SIC",
                               legend_loc="upper right", max_rel_err=0.2,
                               max_y=None):
@@ -65,10 +65,13 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
             using vanilla input settings or 10 gaussian noise features added).
             The second index is a single run of this study. The third index
             refers to the specific model within the ensemble for that run.
-        data (dict): Dictionary containing the data to be used for evaluation.
+        data (dict or list of dict): Dictionary or list of dictionaries
+            (one for each study) containing the data to be used for evaluation.
             Should at least contain the keys "x_test" and "y_test".
         out_filename (str, optionaö): String describing the filename under
             which the plot should be saved.
+        model_types (NoneType or list of str, optional): List of strings
+            describing the model types of the models in `model_list`.
         labels (NoneType or list of str, optional):
             List of labels describing the different training runs that should
             be plotted for comparison. The length of the list *must* be equal
@@ -91,11 +94,6 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
             by itself.
     """
 
-    if loss_list is not None:
-        assert len(model_list) == len(loss_list), (
-            "Error! `loss_list` must have same length as `model_list`"
-            )
-
     if labels is not None:
         assert len(model_list) == len(labels), (
             "Error! `labels` must have same length as `model_list`"
@@ -110,22 +108,27 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
                "HistGradientBoostingClassifier instances."))
         model_types = ["HGB"]*len(model_list)
 
+    if type(data) is not list:
+        data = [data]*len(model_list)
+    else:
+        assert len(model_list) == len(data), (
+            "Error! List of `data` must have same length as `model_list`"
+            )
+
     tpr_val_list = []
     fpr_val_list = []
     for i in range(len(model_list)):
-        if loss_list is None:
-            loss_list = [None]*len(model_list[i])
-        
+
         if model_types is None:
             model_types = ["HGB"]*len(model_list[i])
 
         full_preds_tmp = eval_ensemble(
-            model_list[i], data, losses=loss_list[i],
+            model_list[i], data[i],
             model_type=model_types[i],
             )
 
         tpr_vals_tmp, fpr_vals_tmp = multi_roc_sigeffs(full_preds_tmp,
-                                                       data["y_test"])
+                                                       data[i]["y_test"])
         tpr_val_list.append(tpr_vals_tmp)
         fpr_val_list.append(fpr_vals_tmp)
 
@@ -140,7 +143,7 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
 
     for i in range(len(tpr_val_list)):
         get_sic_curves_multirun(ax, tpr_val_list[i], fpr_val_list[i],
-                                data["y_test"],
+                                data[i]["y_test"],
                                 max_rel_err=max_rel_err, label=labels[i])
 
     plt.xlabel(xlabel)
