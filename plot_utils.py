@@ -46,7 +46,8 @@ def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
 
     return ax
 
-def plot_sic_curves(tpr_list, fpr_list, data_list, max_rel_err=0.2,
+
+def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
                     xlabel="TPR", ylabel="SIC", out_filename=None, labels=None,
                     legend_loc="upper right", max_y=None):
     """Plot single SIC curve including errror bands for several runs.
@@ -56,9 +57,8 @@ def plot_sic_curves(tpr_list, fpr_list, data_list, max_rel_err=0.2,
             (num_tpr_values) containing the TPR values for each run
         fpr_list (list of numpy.ndarray): List of arrays of shape
             (num_fpr_values) containing the FPR values for each run
-        data_list (list of dict): List of dictionaries (one for each run)
-            containing the data to be used for evaluation. Should at least
-            contain the keys "x_test" and "y_test".
+        y_test_list (list of numpy.ndarray): List of arrays containing the
+            truth labels of the test set for each study that should be plotted.
         max_rel_err (float, optional): Maximum relative error allowed
             w.r.t. number of background events up to which we still plot the
             SIC curve.
@@ -88,7 +88,7 @@ def plot_sic_curves(tpr_list, fpr_list, data_list, max_rel_err=0.2,
 
     for i in range(len(tpr_list)):
         get_sic_curves_multirun(ax, tpr_list[i], fpr_list[i],
-                                data_list[i]["y_test"],
+                                y_test_list[i],
                                 max_rel_err=max_rel_err, label=labels[i])
 
     plt.xlabel(xlabel)
@@ -100,6 +100,7 @@ def plot_sic_curves(tpr_list, fpr_list, data_list, max_rel_err=0.2,
         plt.savefig(out_filename)
     plt.show()
     plt.close()
+
 
 def plot_sic_curve_comparison(model_list, data, out_filename=None,
                               model_types=None,
@@ -186,9 +187,12 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
         tpr_val_list.append(tpr_vals_tmp)
         fpr_val_list.append(fpr_vals_tmp)
 
-    plot_sic_curves(tpr_val_list, fpr_val_list, data, max_rel_err=max_rel_err,
-                    xlabel=xlabel, ylabel=ylabel, out_filename=out_filename,
-                    labels=labels, legend_loc=legend_loc, max_y=max_y)
+    y_test_list = [data[i]["y_test"] for i in range(len(data))]
+
+    plot_sic_curves(tpr_val_list, fpr_val_list, y_test_list,
+                    max_rel_err=max_rel_err, xlabel=xlabel, ylabel=ylabel,
+                    out_filename=out_filename, labels=labels,
+                    legend_loc=legend_loc, max_y=max_y)
 
 
 def plot_losses(losses_to_plot, out_file="./losses.pdf", labels=None,
