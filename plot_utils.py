@@ -47,6 +47,61 @@ def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
     return ax
 
 
+def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
+                    xlabel="TPR", ylabel="SIC", out_filename=None, labels=None,
+                    legend_loc="upper right", max_y=None):
+    """Plot single SIC curve including errror bands for several runs.
+    
+    Args:
+        tpr_list (list of numpy.ndarray): List of arrays of shape
+            (num_tpr_values) containing the TPR values for each run
+        fpr_list (list of numpy.ndarray): List of arrays of shape
+            (num_fpr_values) containing the FPR values for each run
+        y_test_list (list of numpy.ndarray): List of arrays containing the
+            truth labels of the test set for each study that should be plotted.
+        max_rel_err (float, optional): Maximum relative error allowed
+            w.r.t. number of background events up to which we still plot the
+            SIC curve.
+        xlabel (str, optional): String containing x axis label.
+            Default is 'TPR'.
+        ylabel (str, optional): String containing y axis label.
+            Default is 'SIC'.
+        out_filename (str, optional): String describing the filename under
+            which the plot should be saved.
+        labels (NoneType or list of str, optional):
+            List of labels describing the different training runs that should
+            be plotted.
+        legend_loc (str, optional): String describing the location of the
+            legend. Default is 'upper right'.
+        max_y (NoneType or float, optional): Maximum value of y axis.
+            Default is None.
+    """
+
+    f, ax = plt.subplots()
+
+    if (labels is not None) and (len(labels) != len(tpr_list)):
+        raise ValueError(("Error! `labels` must have same length as "
+                          "`tpr_val_list` and `fpr_val_list`"))
+
+    if labels is None:
+        labels = [None]*len(tpr_list)
+
+    for i in range(len(tpr_list)):
+        get_sic_curves_multirun(ax, tpr_list[i], fpr_list[i],
+                                y_test_list[i],
+                                max_rel_err=max_rel_err, label=labels[i])
+
+    plt.xlabel(xlabel)
+    plt.xlim(0, 1)
+    plt.ylim(0, max_y)
+    plt.ylabel(ylabel)
+    plt.legend(loc=legend_loc)
+    if out_filename is not None:
+        plt.savefig(out_filename)
+    plt.show()
+    plt.close()
+
+
 def plot_sic_curve_comparison(model_list, data, out_filename=None,
                               model_types=None,
                               labels=None, xlabel="TPR", ylabel="SIC",
@@ -132,29 +187,12 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
         tpr_val_list.append(tpr_vals_tmp)
         fpr_val_list.append(fpr_vals_tmp)
 
-    f, ax = plt.subplots()
+    y_test_list = [data[i]["y_test"] for i in range(len(data))]
 
-    if (labels is not None) and (len(labels) != len(tpr_val_list)):
-        raise ValueError(("Error! `labels` must have same length as "
-                          "`tpr_val_list` and `fpr_val_list`"))
-
-    if labels is None:
-        labels = [None]*len(tpr_val_list)
-
-    for i in range(len(tpr_val_list)):
-        get_sic_curves_multirun(ax, tpr_val_list[i], fpr_val_list[i],
-                                data[i]["y_test"],
-                                max_rel_err=max_rel_err, label=labels[i])
-
-    plt.xlabel(xlabel)
-    plt.xlim(0, 1)
-    plt.ylim(0, max_y)
-    plt.ylabel(ylabel)
-    plt.legend(loc=legend_loc)
-    if out_filename is not None:
-        plt.savefig(out_filename)
-    plt.show()
-    plt.close()
+    plot_sic_curves(tpr_val_list, fpr_val_list, y_test_list,
+                    max_rel_err=max_rel_err, xlabel=xlabel, ylabel=ylabel,
+                    out_filename=out_filename, labels=labels,
+                    legend_loc=legend_loc, max_y=max_y)
 
 
 def plot_losses(losses_to_plot, out_file="./losses.pdf", labels=None,
