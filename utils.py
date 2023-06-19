@@ -763,6 +763,8 @@ def eval_single_model(model, data, model_type="HGB"):
         return eval_single_rf_model(model, data)
     elif model_type == "Ada":
         return eval_single_adaboost_model(model, data)
+    elif model_type == "DNN":
+        return eval_single_dnn_model(model, data)
     else:
         raise NotImplementedError
 
