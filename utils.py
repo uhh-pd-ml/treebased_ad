@@ -13,6 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import joblib
 from copy import deepcopy
+import pandas as pd
 
 
 class HGBPipeline(Pipeline):
@@ -133,6 +134,53 @@ def save_model(model, save_dir, model_num):
 
     """
     joblib.dump(model, join(save_dir, f"model_{model_num}.joblib"))
+
+
+def load_lhco_rd_moreinputs(data_dir, inputs, shuffle=False):
+    input_categories = {
+        "vanilla": ["mj2", "delta_mj", "tau21j1_1", "tau21j2_1"],
+        "plain_subjettinesses_1": [f"tau{i}j{j}_1" for i in range(1,10) for j in range(1, 3)],
+        "plain_subjettinesses_2": [f"tau{i}j{j}_2" for i in range(1,10) for j in range(1, 3)],
+        "plain_subjettinesses_5": [f"tau{i}j{j}_5" for i in range(1,10) for j in range(1, 3)],
+        "tau_ratios_1": [f"tau{i}{i-1}j{j}_1" for i in range(2,10) for j in range(1, 3)],
+        "tau_ratios_2": [f"tau{i}{i-1}j{j}_2" for i in range(2,10) for j in range(1, 3)],
+        "tau_ratios_5": [f"tau{i}{i-1}j{j}_5" for i in range(2,10) for j in range(1, 3)],
+        "tau_x1_1": [f"tau{i}1j{j}_1" for i in range(2,10) for j in range(1, 3)],
+        "tau_x1_2": [f"tau{i}1j{j}_2" for i in range(2,10) for j in range(1, 3)],
+        "tau_x1_5": [f"tau{i}1j{j}_5" for i in range(2,10) for j in range(1, 3)]
+    }
+    
+    input_list = []
+    
+    for inp in inputs:
+        if inp in input_categories.keys():
+            input_list += input_categories[inp]
+        else:
+            input_list.append(inp)
+    
+    # remove duplicates
+    input_list = sorted(list(set(input_list)))
+    
+    input_list.append("label")
+    data_train = pd.read_hdf(join(data_dir, "innerdata_train.h5"), key="df")[input_list]
+    data_val = pd.read_hdf(join(data_dir, "innerdata_val.h5"), key="df")[input_list]
+    data_test = pd.read_hdf(join(data_dir, "innerdata_test.h5"), key="df")[input_list]
+    bg_train = pd.read_hdf(join(data_dir, "innerdata_extrabkg_train.h5"), key="df")[input_list]
+    bg_val = pd.read_hdf(join(data_dir, "innerdata_extrabkg_val.h5"), key="df")[input_list]
+    
+    X_train = np.concatenate([data_train.drop("label", axis=1).values, bg_train.drop("label", axis=1).values])
+    X_val = np.concatenate([data_val.drop("label", axis=1).values, bg_val.drop("label", axis=1).values])
+    X_test = data_test.drop("label", axis=1).values
+    y_train_sigbg = np.concatenate([data_train["label"].values, bg_train["label"].values])
+    y_train_databg = np.concatenate([np.ones(len(data_train)), np.zeros(len(bg_train))])
+    y_val_sigbg = np.concatenate([data_val["label"].values, bg_val["label"].values])
+    y_val_databg = np.concatenate([np.ones(len(data_val)), np.zeros(len(bg_val))])
+    y_test = data_test["label"].values
+    
+    return {"x_train": X_train, "y_train_databg": y_train_databg,
+            "y_train_sigbg": y_train_sigbg, "x_val": X_val,
+            "y_val_databg": y_val_databg, "y_val_sigbg": y_val_sigbg,
+            "x_test": X_test, "y_test": y_test}
 
 
 def load_lhco_rd(data_dir, shuffle=False):
