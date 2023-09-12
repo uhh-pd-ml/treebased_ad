@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import (HistGradientBoostingClassifier,
                               RandomForestClassifier,
                               AdaBoostClassifier)
-from sklearn.neural_network import MLPClassifier
+from torch_DNN import PyTorchClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -139,44 +139,91 @@ def save_model(model, save_dir, model_num):
 def load_lhco_rd_moreinputs(data_dir, inputs, shuffle=False):
     input_categories = {
         "vanilla": ["mj2", "delta_mj", "tau21j1_1", "tau21j2_1"],
-        "plain_subjettinesses_1": [f"tau{i}j{j}_1" for i in range(1,10) for j in range(1, 3)],
-        "plain_subjettinesses_2": [f"tau{i}j{j}_2" for i in range(1,10) for j in range(1, 3)],
-        "plain_subjettinesses_5": [f"tau{i}j{j}_5" for i in range(1,10) for j in range(1, 3)],
-        "tau_ratios_1": [f"tau{i}{i-1}j{j}_1" for i in range(2,10) for j in range(1, 3)],
-        "tau_ratios_2": [f"tau{i}{i-1}j{j}_2" for i in range(2,10) for j in range(1, 3)],
-        "tau_ratios_5": [f"tau{i}{i-1}j{j}_5" for i in range(2,10) for j in range(1, 3)],
-        "tau_x1_1": [f"tau{i}1j{j}_1" for i in range(2,10) for j in range(1, 3)],
-        "tau_x1_2": [f"tau{i}1j{j}_2" for i in range(2,10) for j in range(1, 3)],
-        "tau_x1_5": [f"tau{i}1j{j}_5" for i in range(2,10) for j in range(1, 3)]
+        "plain_subjettinesses_1": [
+            f"tau{i}j{j}_1" for i in range(1, 10) for j in range(1, 3)
+        ],
+        "plain_subjettinesses_2": [
+            f"tau{i}j{j}_2" for i in range(1, 10) for j in range(1, 3)
+        ],
+        "plain_subjettinesses_5": [
+            f"tau{i}j{j}_5" for i in range(1, 10) for j in range(1, 3)
+        ],
+        "tau_ratios_1": [
+            f"tau{i}{i-1}j{j}_1" for i in range(2, 10) for j in range(1, 3)
+        ],
+        "tau_ratios_2": [
+            f"tau{i}{i-1}j{j}_2" for i in range(2, 10) for j in range(1, 3)
+        ],
+        "tau_ratios_5": [
+            f"tau{i}{i-1}j{j}_5" for i in range(2, 10) for j in range(1, 3)
+        ],
+        "tau_x1_1": [
+            f"tau{i}1j{j}_1" for i in range(2, 10) for j in range(1, 3)
+        ],
+        "tau_x1_2": [
+            f"tau{i}1j{j}_2" for i in range(2, 10) for j in range(1, 3)
+        ],
+        "tau_x1_5": [
+            f"tau{i}1j{j}_5" for i in range(2, 10) for j in range(1, 3)
+        ]
     }
-    
+
     input_list = []
-    
+
     for inp in inputs:
         if inp in input_categories.keys():
             input_list += input_categories[inp]
         else:
             input_list.append(inp)
-    
+
     # remove duplicates
     input_list = sorted(list(set(input_list)))
-    
+
     input_list.append("label")
-    data_train = pd.read_hdf(join(data_dir, "innerdata_train.h5"), key="df")[input_list]
-    data_val = pd.read_hdf(join(data_dir, "innerdata_val.h5"), key="df")[input_list]
-    data_test = pd.read_hdf(join(data_dir, "innerdata_test.h5"), key="df")[input_list]
-    bg_train = pd.read_hdf(join(data_dir, "innerdata_extrabkg_train.h5"), key="df")[input_list]
-    bg_val = pd.read_hdf(join(data_dir, "innerdata_extrabkg_val.h5"), key="df")[input_list]
-    
-    X_train = np.concatenate([data_train.drop("label", axis=1).values, bg_train.drop("label", axis=1).values])
-    X_val = np.concatenate([data_val.drop("label", axis=1).values, bg_val.drop("label", axis=1).values])
+    data_train = pd.read_hdf(
+        join(data_dir, "innerdata_train.h5"), key="df"
+    )[input_list]
+
+    data_val = pd.read_hdf(
+        join(data_dir, "innerdata_val.h5"), key="df"
+    )[input_list]
+    data_test = pd.read_hdf(
+        join(data_dir, "innerdata_test.h5"), key="df"
+    )[input_list]
+    bg_train = pd.read_hdf(
+        join(data_dir, "innerdata_extrabkg_train.h5"), key="df"
+    )[input_list]
+    bg_val = pd.read_hdf(
+        join(data_dir, "innerdata_extrabkg_val.h5"), key="df"
+    )[input_list]
+
+    X_train = np.concatenate(
+        [data_train.drop("label", axis=1).values,
+         bg_train.drop("label", axis=1).values])
+
+    X_val = np.concatenate(
+        [data_val.drop("label", axis=1).values,
+         bg_val.drop("label", axis=1).values])
+
     X_test = data_test.drop("label", axis=1).values
-    y_train_sigbg = np.concatenate([data_train["label"].values, bg_train["label"].values])
-    y_train_databg = np.concatenate([np.ones(len(data_train)), np.zeros(len(bg_train))])
-    y_val_sigbg = np.concatenate([data_val["label"].values, bg_val["label"].values])
-    y_val_databg = np.concatenate([np.ones(len(data_val)), np.zeros(len(bg_val))])
+    y_train_sigbg = np.concatenate(
+        [data_train["label"].values,
+         bg_train["label"].values])
+
+    y_train_databg = np.concatenate(
+        [np.ones(len(data_train)),
+         np.zeros(len(bg_train))])
+
+    y_val_sigbg = np.concatenate(
+        [data_val["label"].values,
+         bg_val["label"].values])
+
+    y_val_databg = np.concatenate(
+        [np.ones(len(data_val)),
+         np.zeros(len(bg_val))])
+
     y_test = data_test["label"].values
-    
+
     return {"x_train": X_train, "y_train_databg": y_train_databg,
             "y_train_sigbg": y_train_sigbg, "x_val": X_val,
             "y_val_databg": y_val_databg, "y_val_sigbg": y_val_sigbg,
@@ -532,18 +579,26 @@ def train_ada_model(data, early_stopping=True,
 def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
                     max_iters=100):
 
-    # Compute class weights for training set for weighted loss
-    train_sample_weights = get_sample_weights(data["y_train"])
-
-    if compute_val_weights:
-        sample_weights = get_sample_weights(data["y_val"])
+    if "split_val" in data.keys():
+        # for the DNN model, we can use early stopping internally,
+        # but to use that we need to merge train and validation sets
+        # first and then provide the respective split seed
+        split_seed = data["split_val"]
+        clsf_hist_model = PyTorchClassifier(
+            layers=[64, 64, 64],
+            validation_fraction=0.5,
+            split_seed=split_seed
+        )
+        x_train = np.concatenate((data["x_train"], data["x_val"]))
+        y_train = np.concatenate((data["y_train"], data["y_val"]))
     else:
-        sample_weights = None
-
-    clsf_hist_model = MLPClassifier(
-        hidden_layer_sizes=(64, 64, 64),
-        max_iter=1,
-        early_stopping=False, warm_start=True)
+        clsf_hist_model = PyTorchClassifier(
+            layers=[64, 64, 64],
+            validation_fraction=None,
+            epochs=100,
+        )
+        x_train = data["x_train"]
+        y_train = data["y_train"]
 
     steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
 
@@ -553,43 +608,8 @@ def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
     if "split_val" in data.keys():
         tmp_hist_model.split_seed = data["split_val"]
 
-    min_val_loss = np.inf
-
-    train_losses = []
-    val_losses = []
-
-    for i in range(max_iters):
-        tmp_hist_model.fit(data["x_train"], data["y_train"])
-
-        tmp_train_preds = tmp_hist_model.predict_proba(data["x_train"])[:, 1]
-        tmp_train_loss = log_loss(data["y_train"], tmp_train_preds,
-                                  sample_weight=train_sample_weights)
-
-        tmp_val_preds = tmp_hist_model.predict_proba(
-            data["x_val"]
-            )[:, 1]
-
-        tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
-                                sample_weight=sample_weights)
-
-        train_losses.append(tmp_train_loss)
-        val_losses.append(tmp_val_loss)
-
-        if tmp_val_loss < min_val_loss-1e-7:
-            min_val_loss = tmp_val_loss
-            iter_diff = 0
-            tmp_hist_model.best_model_state = deepcopy(tmp_hist_model)
-            tmp_hist_model.best_iter = i
-        else:
-            iter_diff += 1
-
-        if early_stopping and (iter_diff >= 10):
-            break
-
-        tmp_hist_model["clsf"].max_iter += 1
-
-    tmp_hist_model.train_losses = train_losses
-    tmp_hist_model.val_losses = val_losses
+    # balanced class weights will be computed internally
+    tmp_hist_model.fit(x_train, y_train, sample_weights="balanced")
 
     return tmp_hist_model
 
