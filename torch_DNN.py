@@ -50,7 +50,7 @@ class NeuralNetworkClassifier(nn.Module):
 
 class PyTorchClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self, layers,
-                 learning_rate=0.001, epochs=10, batch_size=32,
+                 learning_rate=0.001, epochs=100, batch_size=32,
                  validation_fraction=0.1, split_seed=42, patience=5,
                  weight_decay=0.0, input_size=None,
                  tol=1e-7):
