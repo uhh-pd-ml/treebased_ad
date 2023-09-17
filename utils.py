@@ -662,7 +662,6 @@ def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
             layers=[64, 64, 64],
             validation_fraction=0.5,
             split_seed=split_seed,
-            epochs=2,
         )
         x_train = np.concatenate((data["x_train"], data["x_val"]))
         y_train = np.concatenate((data["y_train"], data["y_val"]))
