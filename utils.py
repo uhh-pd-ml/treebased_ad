@@ -14,6 +14,7 @@ from sklearn.pipeline import Pipeline
 import joblib
 from copy import deepcopy
 import pandas as pd
+import torch
 
 
 class HGBPipeline(Pipeline):
@@ -86,7 +87,7 @@ def load_single_model(model_dir, run_num, model_num):
         join(model_dir, f"run_{run_num}", f"model_{model_num}.joblib"))
 
 
-def load_models_allruns(model_dir):
+def load_models_allruns(model_dir, is_dnn=False):
     """Load all models from a directory.
 
     Args:
@@ -101,6 +102,12 @@ def load_models_allruns(model_dir):
         A list of the loaded models.
 
     """
+
+    if is_dnn:
+        load_func = load_single_dnn_model
+    else:
+        load_func = load_single_model
+
     num_runs = 0
     for tmp_dir in listdir(model_dir):
         if tmp_dir.startswith("run_") and isdir(join(model_dir, tmp_dir)):
@@ -113,11 +120,14 @@ def load_models_allruns(model_dir):
     for i in range(num_runs):
         # Assume number of models in an ensemble are the same for each run
         if i == 0:
-            models_per_run = len(listdir(join(model_dir, f"run_{i}")))
+            models_per_run = 0
+            for tmp_dir in listdir(join(model_dir, f"run_{i}")):
+                if tmp_dir.endswith("joblib"):
+                    models_per_run += 1
 
         tmp_model_list = []
         for j in range(models_per_run):
-            tmp_model_list.append(load_single_model(model_dir, i, j))
+            tmp_model_list.append(load_func(model_dir, i, j))
 
         all_models.append(tmp_model_list)
 
@@ -134,6 +144,70 @@ def save_model(model, save_dir, model_num):
 
     """
     joblib.dump(model, join(save_dir, f"model_{model_num}.joblib"))
+
+
+def save_dnn_model(model, save_dir, model_num):
+    """Save a trained DNN model to a file.
+
+    Args:
+        model: The trained model to save.
+        save_dir (str): The directory to save the model to.
+        model_num (int): The model number to use in the filename.
+
+    """
+
+    # save scaler
+    scaler = model["scaler"]
+    joblib.dump(scaler, join(save_dir, f"scaler_{model_num}.joblib"))
+
+    # save model state dict
+    torch.save(model["clsf"].model.state_dict(),
+               join(save_dir, f"model_{model_num}.pt"))
+
+    np.save(join(save_dir, f"val_losses_{model_num}.npy"),
+            np.array(model["clsf"].val_losses),
+            )
+    np.save(join(save_dir, f"train_losses_{model_num}.npy"),
+            np.array(model["clsf"].train_losses),
+            )
+
+
+def load_single_dnn_model(model_dir, run_num, model_num):
+    """Load a trained DNN model from a file.
+
+    Args:
+        model_dir (str): The directory containing the model to load.
+        model_num (int): The model number of the model to load.
+
+    Returns:
+        The loaded model.
+
+    """
+
+    # load scaler
+    scaler = joblib.load(join(model_dir, f"run_{run_num}", f"scaler_{model_num}.joblib"))
+    n_inputs = scaler.n_features_in_
+    # load model state dict
+    model_state_dict = torch.load(join(model_dir, f"run_{run_num}", f"model_{model_num}.pt"))
+
+    # load model
+    py_model = PyTorchClassifier(
+        layers=[64, 64, 64],
+        validation_fraction=0.5,
+        split_seed=42,
+        input_size=n_inputs,
+        )
+
+    py_model.model.load_state_dict(model_state_dict)
+    pipe = HGBPipeline([("scaler", scaler), ("clsf", py_model)])
+
+    pipe.val_losses = np.load(join(model_dir, f"run_{run_num}",
+                                   f"val_losses_{model_num}.npy"))
+
+    pipe.train_losses = np.load(join(model_dir, f"run_{run_num}",
+                                     f"train_losses_{model_num}.npy"))
+
+    return pipe
 
 
 def load_lhco_rd_moreinputs(data_dir, inputs, shuffle=False):
@@ -587,7 +661,8 @@ def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
         clsf_hist_model = PyTorchClassifier(
             layers=[64, 64, 64],
             validation_fraction=0.5,
-            split_seed=split_seed
+            split_seed=split_seed,
+            epochs=2,
         )
         x_train = np.concatenate((data["x_train"], data["x_val"]))
         y_train = np.concatenate((data["y_train"], data["y_val"]))
@@ -600,6 +675,11 @@ def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
         x_train = data["x_train"]
         y_train = data["y_train"]
 
+    if compute_val_weights:
+        weights = "balanced"
+    else:
+        weights = None
+
     steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
 
     tmp_hist_model = HGBPipeline(steps)
@@ -609,7 +689,10 @@ def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
         tmp_hist_model.split_seed = data["split_val"]
 
     # balanced class weights will be computed internally
-    tmp_hist_model.fit(x_train, y_train, sample_weights="balanced")
+    tmp_hist_model.fit(x_train, y_train, clsf__sample_weights=weights)
+    
+    tmp_hist_model.val_losses = np.array(tmp_hist_model["clsf"].val_losses)
+    tmp_hist_model.train_losses = np.array(tmp_hist_model["clsf"].train_losses)
 
     return tmp_hist_model
 
@@ -771,7 +854,10 @@ def train_model_ensemble(data, num_models=10, cv_mode="fixed",
             raise NotImplementedError
 
         if save_model_dir is not None:
-            save_model(tmp_hist_model, save_model_dir, ens)
+            if model_type == "DNN":
+                save_dnn_model(tmp_hist_model, save_model_dir, ens)
+            else:
+                save_model(tmp_hist_model, save_model_dir, ens)
 
         model_list.append(tmp_hist_model)
 
@@ -794,7 +880,7 @@ def eval_single_HGB_model(model, data):
 
 
 def eval_single_dnn_model(model, data):
-    return model.best_model_state.predict_proba(data["x_test"])[:, 1]
+    return model.predict_proba(data["x_test"])
 
 
 def eval_single_adaboost_model(model, data):

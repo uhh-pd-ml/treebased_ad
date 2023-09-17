@@ -52,10 +52,9 @@ class PyTorchClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self, layers,
                  learning_rate=0.001, epochs=10, batch_size=32,
                  validation_fraction=0.1, split_seed=42, patience=5,
-                 weight_decay=0.0,
+                 weight_decay=0.0, input_size=None,
                  tol=1e-7):
 
-        self.input_size = None
         self.layers = layers
         self.learning_rate = learning_rate
         self.epochs = epochs
@@ -72,6 +71,13 @@ class PyTorchClassifier(BaseEstimator, ClassifierMixin):
         )
         self.train_losses = None
         self.val_losses = None
+        if input_size is not None:
+            self.input_size = input_size
+            self.model = NeuralNetworkClassifier(
+                self.input_size, self.layers
+                ).to(self.device)
+        else:
+            self.input_size = None
 
     def fit(self, X, y, sample_weights=None):
         X, y = check_X_y(X, y)
@@ -202,7 +208,7 @@ class PyTorchClassifier(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X):
-        check_is_fitted(self, "model")
+        #check_is_fitted(self, "model")
         X = check_array(X)
         X_tensor = torch.FloatTensor(X).to(self.device)
         self.model.eval()
