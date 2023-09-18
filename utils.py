@@ -549,69 +549,26 @@ def get_sample_weights(y):
     return sample_weights
 
 
-def train_rf_model(data, early_stopping=True, compute_val_weights=True,
-                   max_iters=100):
-
-    train_sample_weights = get_sample_weights(data["y_train"])
-    if compute_val_weights:
-        sample_weights = get_sample_weights(data["y_val"])
-    else:
-        sample_weights = None
+def train_rf_model(data, max_iters=100):
 
     clsf_hist_model = RandomForestClassifier(
-            n_estimators=1, max_depth=23, min_samples_leaf=20,
+            n_estimators=max_iters, max_depth=23, min_samples_leaf=20,
             max_features="log2", min_samples_split=14,
             max_samples=0.5434762030454895, class_weight="balanced",
-            warm_start=True
             )
 
     steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
 
     tmp_hist_model = HGBPipeline(steps)
+    
+    tmp_hist_model.fit(data["x_train"], data["y_train"])
 
     # Save seed for random split so train/val split can be reproduced
     if "split_val" in data.keys():
         tmp_hist_model.split_seed = data["split_val"]
 
-    min_val_loss = np.inf
-    val_losses = []
-    train_losses = []
-
-    for i in range(max_iters):
-        tmp_hist_model.fit(data["x_train"], data["y_train"])
-
-        tmp_train_preds = tmp_hist_model.predict_proba(
-            data["x_train"]
-            )[:, 1]
-
-        tmp_train_loss = log_loss(data["y_train"], tmp_train_preds,
-                                  sample_weight=train_sample_weights)
-
-        tmp_val_preds = tmp_hist_model.predict_proba(
-            data["x_val"]
-            )[:, 1]
-
-        tmp_val_loss = log_loss(data["y_val"], tmp_val_preds,
-                                sample_weight=sample_weights)
-
-        val_losses.append(tmp_val_loss)
-        train_losses.append(tmp_train_loss)
-
-        if tmp_val_loss < min_val_loss-1e-7:
-            min_val_loss = tmp_val_loss
-            iter_diff = 0
-            tmp_hist_model.best_iter = i
-            tmp_hist_model.best_model_state = deepcopy(tmp_hist_model)
-        else:
-            iter_diff += 1
-
-        if early_stopping and (iter_diff >= 10):
-            break
-
-        tmp_hist_model['clsf'].n_estimators += 1
-
-    tmp_hist_model.val_losses = val_losses
-    tmp_hist_model.train_losses = train_losses
+    tmp_hist_model.val_losses = None
+    tmp_hist_model.train_losses = None
 
     return tmp_hist_model
 
@@ -832,8 +789,7 @@ def train_model_ensemble(data, num_models=10, cv_mode="fixed",
             tmp_hist_model.cv_mode = cv_mode
         elif model_type == "RF":
             tmp_hist_model = train_rf_model(
-                dat, early_stopping=early_stopping,
-                compute_val_weights=compute_val_weights,
+                dat,
                 max_iters=max_iters)
 
             tmp_hist_model.cv_mode = cv_mode
@@ -890,7 +846,7 @@ def eval_single_adaboost_model(model, data):
 
 
 def eval_single_rf_model(model, data):
-    test_preds = model.best_model_state.predict_proba(data["x_test"])[:, 1]
+    test_preds = model.predict_proba(data["x_test"])[:, 1]
 
     return test_preds
 
