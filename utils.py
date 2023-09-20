@@ -185,10 +185,13 @@ def load_single_dnn_model(model_dir, run_num, model_num):
     """
 
     # load scaler
-    scaler = joblib.load(join(model_dir, f"run_{run_num}", f"scaler_{model_num}.joblib"))
+    scaler = joblib.load(join(model_dir, f"run_{run_num}",
+                              f"scaler_{model_num}.joblib"))
+
     n_inputs = scaler.n_features_in_
     # load model state dict
-    model_state_dict = torch.load(join(model_dir, f"run_{run_num}", f"model_{model_num}.pt"))
+    model_state_dict = torch.load(join(model_dir, f"run_{run_num}",
+                                       f"model_{model_num}.pt"))
 
     # load model
     py_model = PyTorchClassifier(
@@ -560,7 +563,7 @@ def train_rf_model(data, max_iters=100):
     steps = [('scaler', StandardScaler()), ('clsf', clsf_hist_model)]
 
     tmp_hist_model = HGBPipeline(steps)
-    
+
     tmp_hist_model.fit(data["x_train"], data["y_train"])
 
     # Save seed for random split so train/val split can be reproduced
@@ -646,7 +649,7 @@ def train_dnn_model(data, early_stopping=True, compute_val_weights=True,
 
     # balanced class weights will be computed internally
     tmp_hist_model.fit(x_train, y_train, clsf__sample_weights=weights)
-    
+
     tmp_hist_model.val_losses = np.array(tmp_hist_model["clsf"].val_losses)
     tmp_hist_model.train_losses = np.array(tmp_hist_model["clsf"].train_losses)
 

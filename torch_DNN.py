@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
+from sklearn.utils.validation import check_X_y, check_array
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.utils.class_weight import compute_class_weight
@@ -62,7 +62,7 @@ class PyTorchClassifier(BaseEstimator, ClassifierMixin):
         self.validation_fraction = validation_fraction
         self.split_seed = split_seed
         self.patience = patience
-        if self.patience == None:
+        if self.patience is None:
             self.patience = self.epochs
         self.tol = tol
         self.weight_decay = weight_decay
@@ -208,7 +208,6 @@ class PyTorchClassifier(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X):
-        #check_is_fitted(self, "model")
         X = check_array(X)
         X_tensor = torch.FloatTensor(X).to(self.device)
         self.model.eval()

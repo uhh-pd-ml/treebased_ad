@@ -69,7 +69,7 @@ def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
                     xlabel="TPR", ylabel="SIC", out_filename=None, labels=None,
                     legend_loc="upper right", max_y=None):
     """Plot single SIC curve including errror bands for several runs.
-    
+
     Args:
         tpr_list (list of numpy.ndarray): List of arrays of shape
             (num_tpr_values) containing the TPR values for each run
@@ -114,7 +114,7 @@ def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
 
     if color_list is None:
         color_list = [None]*len(tpr_list)
-    
+
     if linestyles is None:
         linestyles = [None]*len(tpr_list)
 
