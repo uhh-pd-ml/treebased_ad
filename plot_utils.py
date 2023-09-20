@@ -4,7 +4,8 @@ from utils import eval_ensemble, multi_roc_sigeffs
 
 
 def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
-                            max_rel_err=0.2, label="", color=None):
+                            max_rel_err=0.2, label="", color=None,
+                            linestyle=None):
     """Plot single SIC curve including errror bands for several runs.
 
     Errorbands are defined as inner 68% of SIC value distribution of the
@@ -40,21 +41,31 @@ def get_sic_curves_multirun(ax, multi_tprs, multi_fprs, y_test,
         (1/np.sqrt(median_fprs*y_test[y_test == 0].shape[0])) < max_rel_err
         )
 
+    if linestyle is None:
+        linestyle = 'solid'
+    else:
+        assert linestyle in ['solid', 'dashed', 'dashdot', 'dotted'], (
+            "Error! `linestyle` must be one of 'solid', 'dashed', 'dashdot' "
+            "or 'dotted'."
+            )
+
     if color is None:
         p = ax.plot(median_tprs[plot_mask], median_sics[plot_mask],
-                    label=label)
+                    label=label, linestyle=linestyle)
     else:
         p = ax.plot(median_tprs[plot_mask], median_sics[plot_mask],
-                    label=label, color=color)
+                    label=label, color=color, linestyle=linestyle)
 
     ax.fill_between(median_tprs[plot_mask], upper_sics[plot_mask],
-                    lower_sics[plot_mask], alpha=0.2, color=p[0].get_color())
+                    lower_sics[plot_mask], alpha=0.2,
+                    facecolor=p[0].get_color(),
+                    edgecolor=None)
 
     return ax
 
 
 def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
-                    color_list=None,
+                    color_list=None, title=None, linestyles=None,
                     xlabel="TPR", ylabel="SIC", out_filename=None, labels=None,
                     legend_loc="upper right", max_y=None):
     """Plot single SIC curve including errror bands for several runs.
@@ -89,8 +100,12 @@ def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
     if (labels is not None) and (len(labels) != len(tpr_list)):
         raise ValueError(("Error! `labels` must have same length as "
                           "`tpr_val_list` and `fpr_val_list`"))
-        
+
     if (color_list is not None) and (len(color_list) != len(tpr_list)):
+        raise ValueError(("Error! `color_list` must have same length as "
+                          "`tpr_val_list` and `fpr_val_list`"))
+
+    if (linestyles is not None) and (len(linestyles) != len(tpr_list)):
         raise ValueError(("Error! `color_list` must have same length as "
                           "`tpr_val_list` and `fpr_val_list`"))
 
@@ -99,10 +114,14 @@ def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
 
     if color_list is None:
         color_list = [None]*len(tpr_list)
+    
+    if linestyles is None:
+        linestyles = [None]*len(tpr_list)
 
     for i in range(len(tpr_list)):
         get_sic_curves_multirun(ax, tpr_list[i], fpr_list[i],
                                 y_test_list[i], color=color_list[i],
+                                linestyle=linestyles[i],
                                 max_rel_err=max_rel_err, label=labels[i])
 
     plt.xlabel(xlabel)
@@ -110,6 +129,17 @@ def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
     plt.ylim(0, max_y)
     plt.ylabel(ylabel)
     plt.legend(loc=legend_loc, frameon=False)
+    if title is not None:
+        ymin = 0
+        ymax = max_y
+        xmin = 0
+        xmax = 1
+        a = 0.03
+        plt.text(xmin + a * (xmax-xmin), ymin + (1-a) * (ymax-ymin),
+                 title, size=plt.rcParams['axes.labelsize'],
+                 color='black', horizontalalignment='left',
+                 verticalalignment='top')
+
     if out_filename is not None:
         plt.savefig(out_filename)
     plt.show()
