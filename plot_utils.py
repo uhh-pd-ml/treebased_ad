@@ -148,9 +148,10 @@ def plot_sic_curves(tpr_list, fpr_list, y_test_list, max_rel_err=0.2,
 
 def plot_sic_curve_comparison(model_list, data, out_filename=None,
                               model_types=None,
+                              color_list=None, linestyles=None,
                               labels=None, xlabel="TPR", ylabel="SIC",
                               legend_loc="upper right", max_rel_err=0.2,
-                              max_y=None):
+                              max_y=None, title=None):
     """A simple wrapper function of `get_sic_curves_multirun`
 
     This function allows to plot multiple SIC curves (e.g. when comparing
@@ -193,11 +194,6 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
             by itself.
     """
 
-    if labels is not None:
-        assert len(model_list) == len(labels), (
-            "Error! `labels` must have same length as `model_list`"
-            )
-
     if model_types is not None:
         assert len(model_list) == len(model_types), (
             "Error! `model_types` must have same length as `model_list`"
@@ -236,6 +232,7 @@ def plot_sic_curve_comparison(model_list, data, out_filename=None,
     plot_sic_curves(tpr_val_list, fpr_val_list, y_test_list,
                     max_rel_err=max_rel_err, xlabel=xlabel, ylabel=ylabel,
                     out_filename=out_filename, labels=labels,
+                    color_list=color_list, linestyles=linestyles, title=title,
                     legend_loc=legend_loc, max_y=max_y)
 
 

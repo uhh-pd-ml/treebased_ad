@@ -1,5 +1,5 @@
 import numpy as np
-from os.path import join, exists, isdir
+from os.path import join, exists, isdir, dirname, abspath
 from os import makedirs, listdir
 from sklearn.utils import class_weight
 from sklearn.metrics import log_loss
@@ -15,6 +15,9 @@ import joblib
 from copy import deepcopy
 import pandas as pd
 import torch
+import zipfile
+import copy
+import scipy as sp
 
 
 class HGBPipeline(Pipeline):
@@ -67,6 +70,34 @@ class HGBPipeline(Pipeline):
             Xt = transform.transform(Xt)
         return self.steps[-1][1].staged_predict_proba(Xt,
                                                       **predict_proba_params)
+
+
+def extract_models():
+    """Extract the models from the zip file.
+
+    This function extracts the models from the zip file containing the
+    trained models in the git submodule 'treebased_ad_files'.
+    """
+
+    current_dir = dirname(abspath(__file__))
+    if not exists(join(current_dir, "treebased_ad_files")):
+        raise FileNotFoundError(("treebased_ad_files directory not found! "
+                                 "Make sure to clone the git submodule."))
+
+    if not exists(join(current_dir, "treebased_ad_files", "models.zip")):
+        raise FileNotFoundError(("models.zip file not found! "
+                                 "Make sure that the git lfs "
+                                 "was set up correctly!"))
+
+    if not exists(join(current_dir, "treebased_ad_files", "models")):
+        makedirs(join(current_dir, "treebased_ad_files", "models"))
+    else:
+        raise FileExistsError("models directory already exists!")
+
+    with zipfile.ZipFile(
+        join(current_dir, "treebased_ad_files", "models.zip"), "r"
+    ) as zip_ref:
+        zip_ref.extractall(join(current_dir, "treebased_ad_files", "models"))
 
 
 def load_single_model(model_dir, run_num, model_num):
@@ -439,6 +470,30 @@ def add_gaussian_features(data, n_gaussians=10):
         ).astype(np.float32)
 
     return new_data
+
+
+def random_rotation(data):
+    """
+    Applies a random rotation to the input data.
+
+    Args:
+        data (dict): A dictionary containing the input data, which should be
+            in the format that is used by the load_lhco_rd function.
+
+    Returns:
+        dict: A dictionary containing the rotated data.
+            The keys are the same as the input data.
+    """
+    tmp_data = copy.deepcopy(data)
+    rng = np.random.default_rng(42)
+    ortho_group = sp.stats.special_ortho_group(dim=data["x_train"].shape[1],
+                                               seed=rng)
+    rotation_matrix = ortho_group.rvs()
+    for key in tmp_data.keys():
+        if key.startswith("x"):
+            tmp_data[key] = np.matmul(rotation_matrix, tmp_data[key].T).T
+
+    return tmp_data
 
 
 def multi_roc_sigeffs(preds, labels):
