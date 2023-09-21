@@ -1,0 +1,3 @@
+[submodule "treebased_ad_files"]
+	path = treebased_ad_files
+	url = https://loeschet@stash.desy.de/scm/~loeschet/treebased_ad_files.git
