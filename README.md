@@ -2,6 +2,7 @@
 
 Anomaly Detection using tree-based algorithms. This repository contains code to reproduce results of figures 7 and 8 from the paper "Back to the Roots: Tree-Based Algorithms for Weakly Supervised Anomaly Detection" (arXiv link soon). Additionally, this code can be used to run other experiments by adjusting the respective parameters for the training and evaluation of several tree-based algorithms or DNNs.
 
+**IMPORTANT NOTE:** If you `git clone` this repository, make sure to use the `--recursive` option in order to also correctly clone the necessary submodule!
 ## Requirements
 
 In order to run this code, `git-lfs` is required. Install `git-lfs` with your favourite package manager, or follow the instructions e.g. on [GitHub](https://docs.github.com/en/repositories/working-with-files/managing-large-files/installing-git-large-file-storage)
